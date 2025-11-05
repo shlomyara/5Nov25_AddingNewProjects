@@ -85,25 +85,26 @@ tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
 
 data_config = load_datasets()
 
-# ────────────── Add New Dataset ──────────────
-st.subheader("➕ Add New Dataset")
+# ────────────── Add New Dataset (Now Collapsible) ──────────────
+with st.expander("➕ Add New Dataset", expanded=False):
+    st.markdown("Use this section to add your own dataset manually. You can expand or collapse it anytime.")
 
-name = st.text_input("Dataset name")
-main_text = st.text_area("Main list values (comma or newline separated)")
-list2_text = st.text_area("List2 modifiers (optional, use + or - signs)")
+    name = st.text_input("Dataset name")
+    main_text = st.text_area("Main list values (comma or newline separated)")
+    list2_text = st.text_area("List2 modifiers (optional, use + or - signs)")
 
-if st.button("Save Dataset"):
-    try:
-        main_list = [float(x.strip()) for x in main_text.replace("\n", ",").split(",") if x.strip()]
-        list2_list = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()] or main_list
-        if name:
-            if save_dataset(name, main_list, list2_list):
-                st.success(f"✅ Dataset '{name}' saved to cloud.")
-                rerun()
-        else:
-            st.warning("Please enter a name.")
-    except Exception as e:
-        st.error(f"Error adding dataset: {e}")
+    if st.button("Save Dataset"):
+        try:
+            main_list = [float(x.strip()) for x in main_text.replace("\n", ",").split(",") if x.strip()]
+            list2_list = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()] or main_list
+            if name:
+                if save_dataset(name, main_list, list2_list):
+                    st.success(f"✅ Dataset '{name}' saved to cloud.")
+                    rerun()
+            else:
+                st.warning("Please enter a name.")
+        except Exception as e:
+            st.error(f"Error adding dataset: {e}")
 
 # ────────────── Select Dataset ──────────────
 if not data_config:
