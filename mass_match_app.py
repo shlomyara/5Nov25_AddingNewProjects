@@ -1,19 +1,28 @@
 import streamlit as st
 import itertools, json, io, pandas as pd
 from supabase import create_client, Client
+from streamlit.runtime.scriptrunner import RerunException, get_script_run_ctx
 
 # ════════════════════════════════════════════════
 # 🔐 Secure Supabase connection (via Streamlit Secrets)
 # ════════════════════════════════════════════════
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ════════════════════════════════════════════════
-# ☁️ Supabase Dataset Helpers
+# 🧩 Utility: Rerun the app safely
+# ════════════════════════════════════════════════
+def rerun():
+    ctx = get_script_run_ctx()
+    if ctx is not None:
+        raise RerunException(ctx)
+
+# ════════════════════════════════════════════════
+# ☁️ Dataset Helpers
 # ════════════════════════════════════════════════
 def load_datasets():
-    """Load all datasets from Supabase"""
     config = {}
     try:
         res = supabase.table("datasets").select("*").execute()
@@ -23,27 +32,26 @@ def load_datasets():
                 "list2_raw": json.loads(r["list2_list"])
             }
     except Exception as e:
-        st.warning(f"⚠️ Could not load datasets from Supabase: {e}")
+        st.warning(f"Could not load datasets from Supabase: {e}")
     return config
 
 
 def save_dataset(name, main_list, list2_list):
-    """Insert or update dataset in Supabase"""
+    """Insert or update dataset"""
     try:
-        data = {
+        res = supabase.table("datasets").upsert({
             "name": name,
             "main_list": json.dumps(main_list),
             "list2_list": json.dumps(list2_list)
-        }
-        supabase.table("datasets").upsert(data).execute()
+        }).execute()
         return True
     except Exception as e:
-        st.error(f"❌ Failed to save dataset: {e}")
+        st.error(f"Save failed: {e}")
         return False
 
 
 def rename_dataset(old, new):
-    """Rename dataset by deleting old record and inserting new one"""
+    """Rename dataset safely by copying data and deleting old one"""
     try:
         row = supabase.table("datasets").select("*").eq("name", old).execute()
         if row.data:
@@ -52,13 +60,17 @@ def rename_dataset(old, new):
             supabase.table("datasets").delete().eq("name", old).execute()
             supabase.table("datasets").upsert(data).execute()
     except Exception as e:
-        st.error(f"❌ Rename failed: {e}")
+        st.error(f"Rename failed: {e}")
 
 
 def delete_dataset(name):
-    """Delete dataset by name"""
+    """Delete dataset by name with clearer feedback"""
     try:
-        supabase.table("datasets").delete().eq("name", name).execute()
+        res = supabase.table("datasets").delete().eq("name", name).execute()
+        if res.data:
+            st.success(f"🗑️ Deleted '{name}' from cloud.")
+        else:
+            st.warning(f"⚠️ No dataset named '{name}' found or delete blocked by RLS.")
     except Exception as e:
         st.error(f"❌ Delete failed: {e}")
 
@@ -87,7 +99,7 @@ if st.button("Save Dataset"):
         if name:
             if save_dataset(name, main_list, list2_list):
                 st.success(f"✅ Dataset '{name}' saved to cloud.")
-                st.rerun()  # ← fixed
+                rerun()
         else:
             st.warning("Please enter a name.")
     except Exception as e:
@@ -115,18 +127,19 @@ with col1:
     if st.button("Rename"):
         if new_name:
             rename_dataset(manage_name, new_name)
-            st.success(f"✅ Renamed '{manage_name}' → '{new_name}'")
-            st.rerun()  # ← fixed
+            st.success(f"Renamed '{manage_name}' → '{new_name}'")
+            rerun()
         else:
             st.warning("Enter a new name.")
 
 with col2:
+    confirm = st.checkbox(f"Confirm delete '{manage_name}'", key="confirm")
     if st.button("Delete"):
-        confirm = st.checkbox(f"Confirm delete '{manage_name}'", key="confirm")
         if confirm:
             delete_dataset(manage_name)
-            st.success(f"🗑️ Deleted '{manage_name}'")
-            st.rerun()  # ← fixed
+            rerun()
+        else:
+            st.warning("Please confirm deletion before proceeding.")
 
 # ════════════════════════════════════════════════
 # ⚙️ Combination Calculation Settings
@@ -143,9 +156,7 @@ run_list2_only = st.checkbox("List2-only combos", False)
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers
 # ════════════════════════════════════════════════
-def within_tolerance(value): 
-    return abs(value - target) <= tolerance
-
+def within_tolerance(value): return abs(value - target) <= tolerance
 def add_result(desc, val, steps, results):
     if within_tolerance(val):
         err = abs(val - target)
