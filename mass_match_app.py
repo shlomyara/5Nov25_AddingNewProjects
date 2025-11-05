@@ -1,192 +1,208 @@
 import streamlit as st
-import itertools
-import pandas as pd
-import io
-import time
-import json
-from supabase import create_client
+import itertools, json, io, pandas as pd
+from supabase import create_client, Client
+from streamlit.runtime.scriptrunner import RerunException, get_script_run_ctx
 
-# --- Title ---
-st.title("🧮 MassMatchFinder | Upload & Manage Datasets")
-st.markdown("""
-Enter a target mass and tolerance, choose or create a dataset,  
-and select which combinations to run.  
-You can upload, type, or select from built-in or cloud-saved datasets.
-""")
-
-# --- Inputs ---
-target = st.number_input("🎯 Target number to match", format="%.5f")
-tolerance = st.number_input("🎯 Acceptable error/tolerance (e.g., 0.1)", value=0.1, format="%.5f")
-
-# ===========================================================
-# ☁️ SUPABASE CONNECTION
-# ===========================================================
+# ════════════════════════════════════════════════
+# 🔐 Secure Supabase connection (via Streamlit Secrets)
+# ════════════════════════════════════════════════
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# --- Helper Functions ---
-def load_all_datasets():
-    """Fetch all user-saved datasets from Supabase."""
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+
+def load_datasets():
+    config = {}
     try:
         res = supabase.table("datasets").select("*").execute()
-        rows = res.data or []
-        data = {}
-        for r in rows:
-            try:
-                data[r["name"]] = {
-                    "main": json.loads(r["main_list"]),
-                    "list2_raw": json.loads(r["list2_list"])
-                }
-            except Exception:
-                pass
-        return data
+        for r in res.data or []:
+            config[r["name"]] = {
+                "main": json.loads(r["main_list"]),
+                "list2_raw": json.loads(r["list2_list"])
+            }
     except Exception as e:
-        st.error(f"❌ Failed to load datasets: {e}")
-        return {}
+        st.warning(f"Could not load datasets from Supabase: {e}")
+    return config
 
-def save_dataset(name, main_list, list2_list):
-    """Save (insert or update) a dataset in Supabase."""
+def rename_dataset(old, new):
     try:
-        supabase.table("datasets").upsert({
-            "name": name,
-            "main_list": json.dumps(main_list),
-            "list2_list": json.dumps(list2_list)
-        }).execute()
-        st.success(f"✅ Saved '{name}' to cloud.")
+        row = supabase.table("datasets").select("*").eq("name", old).execute()
+        if row.data:
+            data = row.data[0]
+            data["name"] = new
+            supabase.table("datasets").delete().eq("name", old).execute()
+            supabase.table("datasets").upsert(data).execute()
     except Exception as e:
-        st.error(f"❌ Failed to save dataset to cloud: {e}")
-
-def rename_dataset(old_name, new_name):
-    """Rename an existing dataset."""
-    try:
-        supabase.table("datasets").update({"name": new_name}).eq("name", old_name).execute()
-        st.success(f"✅ Renamed '{old_name}' → '{new_name}'")
-    except Exception as e:
-        st.error(f"❌ Failed to rename: {e}")
+        st.error(f"Rename failed: {e}")
 
 def delete_dataset(name):
-    """Delete a dataset permanently."""
     try:
         supabase.table("datasets").delete().eq("name", name).execute()
-        st.warning(f"🗑️ Deleted dataset '{name}' from cloud.")
     except Exception as e:
-        st.error(f"❌ Failed to delete: {e}")
+        st.error(f"Delete failed: {e}")
 
-# ===========================================================
-# 📚 BUILT-IN DATASETS
-# ===========================================================
-data_config = {
-    "I_Tide_Linear": {
-        "main": [174.058, 197.084, 127.063, 147.055, 87.055, 200.095, 170.113, 207.113, 114.042, 114.042, 101.047, 129.042, 131.040],
-        "list2_raw": [174.058, 173.051, 197.084, 127.063, 147.055, 87.055, 200.095, 170.113, 207.113, 114.042, 101.047, 129.042, 130.032, 131.040]
-    },
-    "I_Tide_Syclic": {
-        "main": [173.051, 197.084, 127.063, 147.055, 87.055, 200.095, 170.113, 207.113, 114.042, 114.042, 101.047, 129.042, 130.032],
-        "list2_raw": [87.055, 114.042, 130.032, '+71.037', '+56.06', '-15.977', '+1896.83']
-    },
-    "S_Tide": {
-        "main": [138.066, 97.052, 128.058, 57.021, 101.047],
-        "list2_raw": [138.066, 97.052, 128.058, '+71.037']
-    }
-}
+# ════════════════════════════════════════════════
+# 🧮 APP UI
+# ════════════════════════════════════════════════
+st.title("🧮 MassMatchFinder — Cloud Dataset Manager")
 
-# --- Merge with Cloud Data ---
-cloud_data = load_all_datasets()
-data_config.update(cloud_data)
+target = st.number_input("🎯 Target mass", format="%.5f")
+tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
 
-# ===========================================================
-# 📤 UPLOAD FILE
-# ===========================================================
-st.subheader("📤 Upload your own dataset (optional)")
-uploaded_file = st.file_uploader("Upload a .csv or .txt file", type=["csv", "txt"])
+data_config = load_datasets()
 
-def parse_uploaded_file(file):
-    """Parse uploaded file into main_list and list2_list."""
-    content = file.read().decode("utf-8").strip()
-    try:
-        df = pd.read_csv(io.StringIO(content))
-        if df.shape[1] >= 2:
-            main_list = df.iloc[:, 0].dropna().astype(float).tolist()
-            list2_list = [str(x) for x in df.iloc[:, 1].dropna().tolist()]
-            return main_list, list2_list
-        else:
-            main_list = df.iloc[:, 0].dropna().astype(float).tolist()
-            return main_list, main_list
-    except Exception:
-        pass
-    try:
-        items = [float(x.strip()) for x in content.replace("\n", ",").split(",") if x.strip()]
-        return items, items
-    except Exception:
-        raise ValueError("Could not parse file format.")
+# ────────────── Add New Dataset ──────────────
+st.subheader("➕ Add New Dataset")
 
-if uploaded_file is not None:
-    try:
-        main_list, list2_list = parse_uploaded_file(uploaded_file)
-        name = uploaded_file.name.split(".")[0]
-        save_dataset(name, main_list, list2_list)
-        data_config[name] = {"main": main_list, "list2_raw": list2_list}
-        st.success(f"✅ Uploaded dataset '{name}' added and saved to cloud.")
-    except Exception as e:
-        st.error(f"Error reading file: {e}")
+name = st.text_input("Dataset name")
+main_text = st.text_area("Main list values (comma or newline separated)")
+list2_text = st.text_area("List2 modifiers (optional, use + or - signs)")
 
-# ===========================================================
-# ✍️ MANUAL LIST ENTRY
-# ===========================================================
-st.subheader("✍️ Add a New Custom Dataset")
-with st.expander("➕ Add New Custom Dataset"):
-    custom_name = st.text_input("Dataset name (e.g., MyExperiment1)")
-    main_text = st.text_area("Main list values", "")
-    list2_text = st.text_area("List2 modifiers", "")
-
-if st.button("Add Custom Dataset"):
+if st.button("Save Dataset"):
     try:
         main_list = [float(x.strip()) for x in main_text.replace("\n", ",").split(",") if x.strip()]
-        if list2_text.strip():
-            list2_raw = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()]
+        list2_list = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()] or main_list
+        if name:
+            if save_dataset(name, main_list, list2_list):
+                st.success(f"✅ Dataset '{name}' saved to cloud.")
+                rerun()
         else:
-            list2_raw = main_list
-        if not custom_name:
-            custom_name = f"Custom_{len(data_config) + 1}"
-        data_config[custom_name] = {"main": main_list, "list2_raw": list2_raw}
-        save_dataset(custom_name, main_list, list2_raw)
-        st.success(f"✅ Custom dataset '{custom_name}' added and saved to cloud.")
-        st.rerun()
+            st.warning("Please enter a name.")
     except Exception as e:
         st.error(f"Error adding dataset: {e}")
 
-# ===========================================================
-# 📂 SELECT DATASET
-# ===========================================================
-selected_list_name = st.selectbox("Select dataset to use:", list(data_config.keys()))
-selected_data = data_config[selected_list_name]
-selected_list = selected_data["main"]
-sum_selected = sum(selected_list)
-list2_raw = selected_data["list2_raw"]
-st.markdown(f"**Using `{selected_list_name}`** with {len(list2_raw)} modifiers.")
+# ────────────── Select Dataset ──────────────
+if not data_config:
+    st.info("No datasets found. Add one above to start.")
+    st.stop()
 
-# ===========================================================
-# 🗂️ CLOUD DATASET MANAGEMENT
-# ===========================================================
 st.divider()
-st.subheader("🗂️ Manage Cloud Datasets")
+selected_name = st.selectbox("Select dataset to use:", list(data_config.keys()))
+selected_data = data_config[selected_name]
+main_list = selected_data["main"]
+list2_raw = selected_data["list2_raw"]
+st.markdown(f"**Using dataset:** `{selected_name}`  ({len(main_list)} main values, {len(list2_raw)} modifiers)")
 
-if cloud_data:
-    selected_manage = st.selectbox("Select dataset to manage:", list(cloud_data.keys()))
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        new_name = st.text_input("Rename to:", key="rename_input")
-        if st.button("Rename", key="rename_btn"):
-            if new_name.strip():
-                rename_dataset(selected_manage, new_name.strip())
-                st.rerun()
-    with col2:
-        if st.button("Delete", key="delete_btn"):
-            delete_dataset(selected_manage)
-            st.rerun()
-    with col3:
-        if st.button("Reload Cloud Data", key="reload_btn"):
-            st.rerun()
-else:
-    st.info("No cloud datasets found yet. Add one above 👆")
+# ────────────── Manage Datasets ──────────────
+st.subheader("🛠 Manage Datasets")
+manage_name = st.selectbox("Choose dataset to manage:", list(data_config.keys()), key="manage")
+col1, col2 = st.columns(2)
+
+with col1:
+    new_name = st.text_input(f"Rename '{manage_name}' to:", "")
+    if st.button("Rename"):
+        if new_name:
+            rename_dataset(manage_name, new_name)
+            st.success(f"Renamed '{manage_name}' → '{new_name}'")
+            rerun()
+        else:
+            st.warning("Enter a new name.")
+
+with col2:
+    if st.button("Delete"):
+        confirm = st.checkbox(f"Confirm delete '{manage_name}'", key="confirm")
+        if confirm:
+            delete_dataset(manage_name)
+            st.success(f"Deleted '{manage_name}'")
+            rerun()
+
+# ════════════════════════════════════════════════
+# ⚙️ Combination Calculation Settings
+# ════════════════════════════════════════════════
+st.divider()
+st.subheader("⚙️ Combination Settings")
+
+run_main_only = st.checkbox(f"{selected_name} only", True)
+run_additions = st.checkbox("Include + modifiers", True)
+run_subtractions = st.checkbox("Include - modifiers", True)
+run_sub_add = st.checkbox("Include - and + combined", True)
+run_list2_only = st.checkbox("List2-only combos", False)
+
+# ════════════════════════════════════════════════
+# 🧠 Calculation Helpers
+# ════════════════════════════════════════════════
+def within_tolerance(value): return abs(value - target) <= tolerance
+def add_result(desc, val, steps, results):
+    if within_tolerance(val):
+        err = abs(val - target)
+        results.append((len(steps), err, desc, val, err))
+
+# Split modifiers into + and - groups
+list2_add, list2_sub = [], []
+for item in list2_raw:
+    try:
+        if isinstance(item, str):
+            if item.startswith('+'): list2_add.append(float(item[1:]))
+            elif item.startswith('-'): list2_sub.append(float(item[1:]))
+            else:
+                val = float(item)
+                list2_add.append(val)
+                list2_sub.append(val)
+        else:
+            list2_add.append(item)
+            list2_sub.append(item)
+    except:
+        pass
+
+# ════════════════════════════════════════════════
+# ▶️ Run Match Search
+# ════════════════════════════════════════════════
+st.divider()
+if st.button("▶️ Run Matching Search"):
+    results = []
+    total_main = sum(main_list)
+
+    progress = st.progress(0)
+    steps, done = 1, 0
+
+    if run_main_only:
+        add_result(f"{selected_name} only", total_main, [], results)
+
+    # additions
+    if run_additions:
+        for r in range(1, 4):
+            for combo in itertools.combinations_with_replacement(list2_add, r):
+                add_result(f"+{combo}", total_main + sum(combo), combo, results)
+                done += 1
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+    # subtractions
+    if run_subtractions:
+        for r in range(1, 4):
+            for combo in itertools.combinations(list2_sub, r):
+                add_result(f"-{combo}", total_main - sum(combo), combo, results)
+                done += 1
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+    # sub+add
+    if run_sub_add:
+        for sub in list2_sub:
+            for add in list2_add:
+                add_result(f"-{sub} +{add}", total_main - sub + add, [sub, add], results)
+                done += 1
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+    # list2 only
+    if run_list2_only:
+        combined = list2_add + [-v for v in list2_sub]
+        for r in range(2, 6):
+            for combo in itertools.combinations_with_replacement(combined, r):
+                add_result(f"List2 {combo}", sum(combo), combo, results)
+                done += 1
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+    progress.progress(1.0)
+
+    # results
+    if results:
+        st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
+        for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
+            st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
+    else:
+        st.warning("No matches found.")
