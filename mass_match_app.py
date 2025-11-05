@@ -168,7 +168,7 @@ if st.button("Add Custom Dataset"):
             data_config[custom_name] = {"main": main_list, "list2_raw": list2_raw}
             save_dataset(custom_name, main_list, list2_raw)
             st.success(f"✅ Custom dataset '{custom_name}' added and saved to cloud.")
-          st.experimental_rerun()
+            st.experimental_rerun()
         except Exception as e:
             st.error(f"Error adding dataset: {e}")
 # ===========================================================
