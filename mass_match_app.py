@@ -1,6 +1,6 @@
 
 import streamlit as st
-import itertools, json, io, pandas as pd
+import itertools, json, os, pandas as pd
 from supabase import create_client, Client
 from streamlit.runtime.scriptrunner import RerunException, get_script_run_ctx
 
@@ -11,6 +11,46 @@ SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# ════════════════════════════════════════════════
+# 📁 Global Name Storage (JSON File)
+# ════════════════════════════════════════════════
+NAME_FILE = "global_names.json"
+
+def load_global_names():
+    """Load or create the global modifier name map."""
+    if os.path.exists(NAME_FILE):
+        with open(NAME_FILE, "r") as f:
+            return json.load(f)
+    default_map = {
+        "-1.007": "Hydrogen loss",
+        "1.008": "Hydrogen gain",
+        "2.016": "Deuterium gain",
+        "15.995": "Oxygen gain",
+        "18.011": "Water loss",
+        "17.003": "Ammonia loss",
+        "14.003": "Nitrogen addition",
+        "43.989": "CO₂ loss"
+    }
+    with open(NAME_FILE, "w") as f:
+        json.dump(default_map, f, indent=2)
+    return default_map
+
+def save_global_names(mapping):
+    with open(NAME_FILE, "w") as f:
+        json.dump(mapping, f, indent=2)
+
+GLOBAL_NAME_MAP = load_global_names()
+
+def get_global_name(num):
+    """Return friendly name for a numeric modifier."""
+    for k, v in GLOBAL_NAME_MAP.items():
+        try:
+            if abs(float(k) - float(num)) < 1e-5:
+                return v
+        except:
+            continue
+    return None
 
 # ════════════════════════════════════════════════
 # 🧩 Utility: Rerun the app safely
@@ -40,7 +80,7 @@ def load_datasets():
 def save_dataset(name, main_list, list2_list):
     """Insert or update dataset"""
     try:
-        res = supabase.table("datasets").upsert({
+        supabase.table("datasets").upsert({
             "name": name,
             "main_list": json.dumps(main_list),
             "list2_list": json.dumps(list2_list)
@@ -75,7 +115,6 @@ def delete_dataset(name):
     except Exception as e:
         st.error(f"❌ Delete failed: {e}")
 
-
 # ════════════════════════════════════════════════
 # 🧮 APP UI
 # ════════════════════════════════════════════════
@@ -85,6 +124,41 @@ target = st.number_input("🎯 Target mass", format="%.5f")
 tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
 
 data_config = load_datasets()
+
+# ────────────── Manage Global Modifier Names ──────────────
+with st.expander("🧩 Manage Global Modifier Names", expanded=False):
+    st.markdown("Add or update **global names** for modifiers. These apply to all datasets automatically.")
+
+    if GLOBAL_NAME_MAP:
+        st.write("### Current Modifier Names")
+        st.table(pd.DataFrame([
+            {"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))
+        ]))
+    else:
+        st.info("No global modifier names yet.")
+
+    st.divider()
+    num_val = st.text_input("Number (e.g. -1.007)")
+    name_val = st.text_input("Description (e.g. Hydrogen loss)")
+    if st.button("💾 Save Name"):
+        if num_val and name_val:
+            GLOBAL_NAME_MAP[num_val.strip()] = name_val.strip()
+            save_global_names(GLOBAL_NAME_MAP)
+            st.success(f"Saved {num_val} → {name_val}")
+            rerun()
+        else:
+            st.warning("Please fill both fields.")
+
+    st.divider()
+    del_key = st.selectbox("🗑️ Delete a name", ["-- Select --"] + list(GLOBAL_NAME_MAP.keys()))
+    if st.button("Delete Selected"):
+        if del_key != "-- Select --":
+            GLOBAL_NAME_MAP.pop(del_key, None)
+            save_global_names(GLOBAL_NAME_MAP)
+            st.success(f"Deleted {del_key}")
+            rerun()
+        else:
+            st.warning("Select a name to delete.")
 
 # ────────────── Add New Dataset (Now Collapsible) ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
@@ -195,7 +269,6 @@ if st.button("▶️ Run Matching Search"):
     if run_main_only:
         add_result(f"{selected_name} only", total_main, [], results)
 
-    # additions
     if run_additions:
         for r in range(1, 4):
             for combo in itertools.combinations_with_replacement(list2_add, r):
@@ -204,7 +277,6 @@ if st.button("▶️ Run Matching Search"):
                 if done % 200 == 0:
                     progress.progress(min(done / 5000, 1.0))
 
-    # subtractions
     if run_subtractions:
         for r in range(1, 4):
             for combo in itertools.combinations(list2_sub, r):
@@ -213,7 +285,6 @@ if st.button("▶️ Run Matching Search"):
                 if done % 200 == 0:
                     progress.progress(min(done / 5000, 1.0))
 
-    # sub+add
     if run_sub_add:
         for sub in list2_sub:
             for add in list2_add:
@@ -222,7 +293,6 @@ if st.button("▶️ Run Matching Search"):
                 if done % 200 == 0:
                     progress.progress(min(done / 5000, 1.0))
 
-    # list2 only
     if run_list2_only:
         combined = list2_add + [-v for v in list2_sub]
         for r in range(2, 6):
@@ -234,10 +304,16 @@ if st.button("▶️ Run Matching Search"):
 
     progress.progress(1.0)
 
-    # results
     if results:
         st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
+
+            # ↳ Show readable names for known numbers
+            nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",") if x.strip().replace('.', '', 1).isdigit()]
+            for n in nums:
+                nm = get_global_name(n)
+                if nm:
+                    st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
