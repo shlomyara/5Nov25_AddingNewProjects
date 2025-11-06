@@ -9,41 +9,56 @@ from streamlit.runtime.scriptrunner import RerunException, get_script_run_ctx
 # ════════════════════════════════════════════════
 SUPABASE_URL = st.secrets["SUPABASE_URL"]
 SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ════════════════════════════════════════════════
-# 📁 Global Name Storage (JSON File)
+# 🌐 Global Name Storage — via Supabase
 # ════════════════════════════════════════════════
-NAME_FILE = "global_names.json"
-
 def load_global_names():
-    """Load or create the global modifier name map."""
-    if os.path.exists(NAME_FILE):
-        with open(NAME_FILE, "r") as f:
-            return json.load(f)
-    default_map = {
-        "-1.007": "Hydrogen loss",
-        "1.008": "Hydrogen gain",
-        "2.016": "Deuterium gain",
-        "15.995": "Oxygen gain",
-        "18.011": "Water loss",
-        "17.003": "Ammonia loss",
-        "14.003": "Nitrogen addition",
-        "43.989": "CO₂ loss"
-    }
-    with open(NAME_FILE, "w") as f:
-        json.dump(default_map, f, indent=2)
-    return default_map
+    """Load global names from Supabase, or insert defaults if empty."""
+    try:
+        res = supabase.table("global_names").select("*").execute()
+        if res.data and len(res.data) > 0:
+            return {r["number"]: r["name"] for r in res.data}
 
-def save_global_names(mapping):
-    with open(NAME_FILE, "w") as f:
-        json.dump(mapping, f, indent=2)
+        # If empty, insert default values
+        default_map = {
+            "-1.007": "Hydrogen loss",
+            "1.008": "Hydrogen gain",
+            "2.016": "Deuterium gain",
+            "15.995": "Oxygen gain",
+            "18.011": "Water loss",
+            "17.003": "Ammonia loss",
+            "14.003": "Nitrogen addition",
+            "43.989": "CO₂ loss"
+        }
+        for k, v in default_map.items():
+            supabase.table("global_names").upsert({"number": k, "name": v}).execute()
+        return default_map
+    except Exception as e:
+        st.error(f"Failed to load global names from Supabase: {e}")
+        return {}
 
-GLOBAL_NAME_MAP = load_global_names()
+def save_global_name(number, name):
+    """Add or update a global name in Supabase."""
+    try:
+        supabase.table("global_names").upsert({"number": number, "name": name}).execute()
+        return True
+    except Exception as e:
+        st.error(f"Save failed: {e}")
+        return False
+
+def delete_global_name(number):
+    """Delete a global name from Supabase."""
+    try:
+        supabase.table("global_names").delete().eq("number", number).execute()
+        return True
+    except Exception as e:
+        st.error(f"Delete failed: {e}")
+        return False
 
 def get_global_name(num):
-    """Return friendly name for a numeric modifier."""
+    """Find human-readable name from global map"""
     for k, v in GLOBAL_NAME_MAP.items():
         try:
             if abs(float(k) - float(num)) < 1e-5:
@@ -51,6 +66,8 @@ def get_global_name(num):
         except:
             continue
     return None
+
+GLOBAL_NAME_MAP = load_global_names()
 
 # ════════════════════════════════════════════════
 # 🧩 Utility: Rerun the app safely
@@ -76,9 +93,7 @@ def load_datasets():
         st.warning(f"Could not load datasets from Supabase: {e}")
     return config
 
-
 def save_dataset(name, main_list, list2_list):
-    """Insert or update dataset"""
     try:
         supabase.table("datasets").upsert({
             "name": name,
@@ -90,9 +105,7 @@ def save_dataset(name, main_list, list2_list):
         st.error(f"Save failed: {e}")
         return False
 
-
 def rename_dataset(old, new):
-    """Rename dataset safely by copying data and deleting old one"""
     try:
         row = supabase.table("datasets").select("*").eq("name", old).execute()
         if row.data:
@@ -103,9 +116,7 @@ def rename_dataset(old, new):
     except Exception as e:
         st.error(f"Rename failed: {e}")
 
-
 def delete_dataset(name):
-    """Delete dataset by name with clearer feedback"""
     try:
         res = supabase.table("datasets").delete().eq("name", name).execute()
         if res.data:
@@ -142,10 +153,9 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
     name_val = st.text_input("Description (e.g. Hydrogen loss)")
     if st.button("💾 Save Name"):
         if num_val and name_val:
-            GLOBAL_NAME_MAP[num_val.strip()] = name_val.strip()
-            save_global_names(GLOBAL_NAME_MAP)
-            st.success(f"Saved {num_val} → {name_val}")
-            rerun()
+            if save_global_name(num_val.strip(), name_val.strip()):
+                st.success(f"Saved {num_val} → {name_val}")
+                rerun()
         else:
             st.warning("Please fill both fields.")
 
@@ -153,8 +163,7 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
     del_key = st.selectbox("🗑️ Delete a name", ["-- Select --"] + list(GLOBAL_NAME_MAP.keys()))
     if st.button("Delete Selected"):
         if del_key != "-- Select --":
-            GLOBAL_NAME_MAP.pop(del_key, None)
-            save_global_names(GLOBAL_NAME_MAP)
+            delete_global_name(del_key)
             st.success(f"Deleted {del_key}")
             rerun()
         else:
