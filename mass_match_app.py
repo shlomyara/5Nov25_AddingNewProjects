@@ -135,7 +135,7 @@ GLOBAL_NAME_MAP = load_global_names()
 # ════════════════════════════════════════════════
 # 🧮 APP UI
 # ════════════════════════════════════════════════
-st.title("🧮 MassMatchFinder — Cloud Dataset Manager")
+st.title("🧬🔍 MassMatchFinder — NewProjects")
 
 target = st.number_input("🎯 Target mass", format="%.5f")
 tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
