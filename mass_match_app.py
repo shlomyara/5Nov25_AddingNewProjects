@@ -27,7 +27,8 @@ def load_datasets():
         res = supabase.table("datasets").select("*").execute()
         for r in res.data or []:
             config[r["name"]] = {
-                "main": json.loads(r["main_list"]),
+                # ensure correct float conversion
+                "main": [float(x) for x in json.loads(r["main_list"])],
                 "list2_raw": json.loads(r["list2_list"])
             }
     except Exception as e:
@@ -134,7 +135,7 @@ GLOBAL_NAME_MAP = load_global_names()
 # ════════════════════════════════════════════════
 # 🧮 APP UI
 # ════════════════════════════════════════════════
-st.title("🧬🔍 MassMatchFinder — NewProjects")
+st.title("🧬🔍 MassMatchFinder — Cloud Edition")
 
 target = st.number_input("🎯 Target mass", format="%.5f")
 tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
@@ -173,7 +174,7 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
         else:
             st.warning("Select a name to delete.")
 
-# ────────────── Add New Dataset (Collapsible) ──────────────
+# ────────────── Add New Dataset ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
     st.markdown("Use this section to add your own dataset manually.")
     name = st.text_input("Dataset name")
@@ -205,7 +206,7 @@ main_list = selected_data["main"]
 list2_raw = selected_data["list2_raw"]
 st.markdown(f"**Using dataset:** `{selected_name}`  ({len(main_list)} main values, {len(list2_raw)} modifiers)")
 
-# ────────────── Manage Datasets (Collapsible) ──────────────
+# ────────────── Manage Datasets ──────────────
 with st.expander("🛠 Manage Datasets", expanded=False):
     st.markdown("Use this section to rename or delete existing datasets.")
     manage_name = st.selectbox("Choose dataset to manage:", list(data_config.keys()), key="manage")
@@ -230,7 +231,7 @@ with st.expander("🛠 Manage Datasets", expanded=False):
             else:
                 st.warning("Please confirm deletion before proceeding.")
 
-# ────────────── Combination Settings (Collapsible) ──────────────
+# ────────────── Combination Settings ──────────────
 with st.expander("⚙️ Combination Settings", expanded=False):
     st.markdown("Adjust which combination types to include in your search.")
     run_main_only = st.checkbox(f"{selected_name} only", True)
@@ -238,7 +239,6 @@ with st.expander("⚙️ Combination Settings", expanded=False):
     run_subtractions = st.checkbox("Include - modifiers", True)
     run_sub_add = st.checkbox("Include - and + combined", True)
     run_list2_only = st.checkbox("List2-only combos", False)
-
 
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers  (fixed for parity with Code 1)
@@ -263,7 +263,6 @@ for item in list2_raw:
         elif item.startswith('-'):
             list2_sub.append(float(item[1:]))
         else:
-            # Only numeric strings are treated as values, not both by default
             try:
                 val = float(item)
                 list2_add.append(val)
@@ -271,10 +270,8 @@ for item in list2_raw:
             except ValueError:
                 pass
     else:
-        # numeric
         list2_add.append(float(item))
         list2_sub.append(float(item))
-
 
 # ════════════════════════════════════════════════
 # ▶️ Run Matching Search (fixed to match Code 1)
@@ -341,7 +338,6 @@ if st.button("▶️ Run Matching Search"):
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
 
-            # optional global name caption (non-affecting)
             nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",")
                     if x.strip().replace('.', '', 1).isdigit()]
             for n in nums:
@@ -350,70 +346,3 @@ if st.button("▶️ Run Matching Search"):
                     st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
-
-
-
-# ════════════════════════════════════════════════
-# ▶️ Run Match Search
-# ════════════════════════════════════════════════
-st.divider()
-if st.button("▶️ Run Matching Search"):
-    results = []
-    total_main = sum(main_list)
-
-    progress = st.progress(0)
-    done = 0
-
-    if run_main_only:
-        add_result(f"{selected_name} only", total_main, [], results)
-
-    # additions
-    if run_additions:
-        for r in range(1, 4):
-            for combo in itertools.combinations_with_replacement(list2_add, r):
-                add_result(f"+{combo}", total_main + sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
-
-    # subtractions
-    if run_subtractions:
-        for r in range(1, 4):
-            for combo in itertools.combinations(list2_sub, r):
-                add_result(f"-{combo}", total_main - sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
-
-    # sub+add
-    if run_sub_add:
-        for sub in list2_sub:
-            for add in list2_add:
-                add_result(f"-{sub} +{add}", total_main - sub + add, [sub, add], results)
-                done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
-
-    # list2 only
-    if run_list2_only:
-        combined = list2_add + [-v for v in list2_sub]
-        for r in range(2, 6):
-            for combo in itertools.combinations_with_replacement(combined, r):
-                add_result(f"List2 {combo}", sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
-
-    progress.progress(1.0)
-
-    # results
-    if results:
-        st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
-        for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
-            st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
-
-            # show human-readable global names if any
-            nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",") if x.strip().replace('.', '', 1).isdigit()]
-            for n in nums:
-                nm = get_global_name(n)
-                if nm:
-                    st.caption(f"↳ {n} → {nm}")
-    else:
-        st.warning("No matches found.")
-
