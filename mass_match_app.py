@@ -218,11 +218,12 @@ def add_result(desc, val, steps, results):
         err = abs(val - target)
         results.append((len(steps), err, desc, val, err))
 
-# --- Parse modifiers faithfully (handles strings & numbers exactly like Code 1) ---
+# --- Parse modifiers (handles extra quotes & exact Code 1 behaviour) ---
 list2_add, list2_sub = [], []
 
 for item in list2_raw:
-    s = str(item).strip()
+    # Normalize weird Supabase cases like "'+56.06'"
+    s = str(item).strip().strip("'").strip('"')
     try:
         if s.startswith('+'):
             list2_add.append(float(s[1:]))
@@ -230,8 +231,6 @@ for item in list2_raw:
             list2_sub.append(abs(float(s)))
         else:
             val = float(s)
-            # If numeric and positive → treat as in both lists (to allow natural overlaps)
-            # If numeric and negative → treat as subtraction only
             if val >= 0:
                 list2_add.append(val)
                 list2_sub.append(val)
@@ -247,14 +246,12 @@ st.divider()
 if st.button("▶️ Run Matching Search"):
     results = []
     total_main = sum(main_list)
-
     progress = st.progress(0)
     done = 0
 
     if run_main_only:
         add_result(f"{selected_name} only", total_main, [], results)
 
-    # additions
     if run_additions:
         for r in range(1, 4):
             for combo in itertools.combinations_with_replacement(list2_add, r):
@@ -262,7 +259,6 @@ if st.button("▶️ Run Matching Search"):
                 done += 1
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
-    # subtractions
     if run_subtractions:
         for r in range(1, 4):
             for combo in itertools.combinations(list2_sub, r):
@@ -270,17 +266,15 @@ if st.button("▶️ Run Matching Search"):
                 done += 1
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
-    # sub+add
     if run_sub_add:
         for sub in list2_sub:
             for add in list2_add:
-                if sub == add:  # skip identical
+                if sub == add:
                     continue
                 add_result(f"-({sub},) +({add},)", total_main - sub + add, [sub, add], results)
                 done += 1
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
-    # list2 only
     if run_list2_only:
         combined = list2_add + [-v for v in list2_sub]
         for r in range(2, 6):
@@ -291,13 +285,10 @@ if st.button("▶️ Run Matching Search"):
 
     progress.progress(1.0)
 
-    # results
     if results:
         st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
-
-            # show readable global names if defined
             nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",") if x.strip().replace('.', '', 1).isdigit()]
             for n in nums:
                 nm = get_global_name(n)
@@ -305,4 +296,5 @@ if st.button("▶️ Run Matching Search"):
                     st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
+
 
