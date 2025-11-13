@@ -152,22 +152,62 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
                 rerun()
 
 # ────────────── Add Dataset ──────────────
+# ────────────── Add New Dataset (Collapsible) ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
+    st.markdown("You can **add a dataset manually** or **upload from a 2-column CSV file** (Column A = main list, Column B = modifiers).")
+
+    # --- Option 1: Manual Entry ---
     name = st.text_input("Dataset name")
     main_text = st.text_area("Main list values (comma or newline separated)")
     list2_text = st.text_area("List2 modifiers (optional, use + or - signs)")
-    if st.button("Save Dataset"):
+
+    # --- Option 2: CSV Upload ---
+    st.divider()
+    st.markdown("### 📂 Or upload a 2-column CSV file")
+    uploaded_file = st.file_uploader("Upload CSV (2 columns only)", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            if len(df.columns) < 2:
+                st.error("❌ The CSV must have at least two columns (A and B).")
+            else:
+                colA = df.columns[0]
+                colB = df.columns[1]
+                list_A = df[colA].dropna().astype(str).tolist()
+                list_B = df[colB].dropna().astype(str).tolist()
+
+                st.success(f"✅ Loaded {len(list_A)} main values and {len(list_B)} modifiers from `{uploaded_file.name}`")
+                st.write("**Preview:**")
+                st.dataframe(df.head())
+
+                # Optional: Fill inputs automatically
+                if not main_text and not list2_text:
+                    main_text = ", ".join(list_A)
+                    list2_text = ", ".join(list_B)
+
+                # Display combined summary
+                st.markdown(f"**Main list (A):** {', '.join(list_A[:10])} ...")
+                st.markdown(f"**List2 (B):** {', '.join(list_B[:10])} ...")
+        except Exception as e:
+            st.error(f"Failed to read CSV: {e}")
+
+    # --- Save Dataset Button ---
+    st.divider()
+    if st.button("💾 Save Dataset"):
         try:
             main_list = [float(x.strip()) for x in main_text.replace("\n", ",").split(",") if x.strip()]
             list2_list = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()] or main_list
+
             if name:
                 if save_dataset(name, main_list, list2_list):
-                    st.success(f"✅ Dataset '{name}' saved.")
+                    st.success(f"✅ Dataset '{name}' saved to cloud.")
                     rerun()
             else:
-                st.warning("Please enter a name.")
+                st.warning("Please enter a dataset name.")
         except Exception as e:
-            st.error(f"Error adding dataset: {e}")
+            st.error(f"Error saving dataset: {e}")
+
 
 # ────────────── Select Dataset ──────────────
 if not data_config:
