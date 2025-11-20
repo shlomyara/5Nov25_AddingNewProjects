@@ -316,12 +316,135 @@ if st.button("▶️ Run Matching Search"):
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
     if run_list2_only:
-        combined = list2_add + [-v for v in list2_sub]
-        for r in range(2, 6):
-            for combo in itertools.combinations_with_replacement(combined, r):
-                add_result(f"List2 {combo}", sum(combo), combo, results)
+        # ==========================================
+        # New behaviour: fragments of main_list
+        # with optional modifications (list2)
+        # and optional single substitution.
+        # ==========================================
+        n = len(main_list)
+
+        # --- Build signed modifiers from list2 ---
+        #  +x : only added
+        #  -x : only subtracted
+        #   x : can be added (+x) or subtracted (-x)
+        signed_mods = []
+        seen = set()
+
+        # positive shifts from list2_add
+        for v in list2_add:
+            v = float(v)
+            key = ('+', round(v, 6))
+            if key not in seen:
+                seen.add(key)
+                signed_mods.append(v)      # +v
+
+        # negative shifts from list2_sub
+        for v in list2_sub:
+            v = float(v)
+            key = ('-', round(v, 6))
+            if key not in seen:
+                seen.add(key)
+                signed_mods.append(-v)     # -v
+
+        # --- Prefix sums to get fragment masses quickly ---
+        prefix = [0.0]
+        for x in main_list:
+            prefix.append(prefix[-1] + float(x))
+
+        # ==========================================
+        # Loop over all contiguous fragments i..j
+        # positions are 1-based in the description
+        # ==========================================
+        for start in range(n):
+            for end in range(start + 1, n + 1):
+                # fragment main_list[start:end]
+                frag_sum = prefix[end] - prefix[start]
+                frag_label = f"{start + 1}-{end}"  # e.g. "1-8", "3-4"
+
+                # ── 0) Fragment only (no modification) ──
+                add_result(f"frag {frag_label}", frag_sum, [], results)
                 done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+                # If there are no modifiers at all, skip mod logic
+                if not signed_mods:
+                    continue
+
+                # ── 1) Fragment + ONE modification from list2 ──
+                for m in signed_mods:
+                    val = frag_sum + m
+                    desc = f"frag {frag_label} {m:+.5f}"
+                    add_result(desc, val, [m], results)
+                    done += 1
+                    if done % 200 == 0:
+                        progress.progress(min(done / 5000, 1.0))
+
+                # ── 2) Fragment + TWO modifications from list2 ──
+                # maximum of 2 modifiers, can be same number twice
+                for i_m, m1 in enumerate(signed_mods):
+                    for m2 in signed_mods[i_m:]:
+                        total_mod = m1 + m2
+                        val = frag_sum + total_mod
+                        desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
+                        add_result(desc, val, [m1, m2], results)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
+                # ── 3) Single substitution inside fragment ──
+                # pick one position in the fragment, replace its AA mass
+                # with another AA mass from main_list (one-time substitution),
+                # with or without the same modifications as above.
+                for k in range(start, end):
+                    old_mass = float(main_list[k])
+                    pos_in_frag = k - start + 1  # position inside fragment, 1-based
+
+                    for subst_idx, subst_mass_raw in enumerate(main_list):
+                        subst_mass = float(subst_mass_raw)
+                        # skip trivial case (same position & same mass)
+                        if subst_idx == k and abs(subst_mass - old_mass) < 1e-9:
+                            continue
+
+                        # base mass after substitution:
+                        # frag_sum - old + new
+                        sub_base = frag_sum - old_mass + subst_mass
+                        base_desc = (
+                            f"frag {frag_label} subst pos{pos_in_frag} "
+                            f"{old_mass:.5f}->{subst_mass:.5f}"
+                        )
+
+                        # 3a. substitution only (no list2 modification)
+                        add_result(base_desc, sub_base, [sub_base - frag_sum], results)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
+                        # 3b. substitution + ONE modification
+                        for m in signed_mods:
+                            val = sub_base + m
+                            desc = f"{base_desc} {m:+.5f}"
+                            add_result(desc, val, [sub_base - frag_sum, m], results)
+                            done += 1
+                            if done % 200 == 0:
+                                progress.progress(min(done / 5000, 1.0))
+
+                        # 3c. substitution + TWO modifications
+                        for i_m, m1 in enumerate(signed_mods):
+                            for m2 in signed_mods[i_m:]:
+                                total_mod = m1 + m2
+                                val = sub_base + total_mod
+                                desc = f"{base_desc} {m1:+.5f} {m2:+.5f}"
+                                add_result(
+                                    desc,
+                                    val,
+                                    [sub_base - frag_sum, m1, m2],
+                                    results,
+                                )
+                                done += 1
+                                if done % 200 == 0:
+                                    progress.progress(min(done / 5000, 1.0))
+
 
     progress.progress(1.0)
 
