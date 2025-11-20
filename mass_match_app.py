@@ -315,13 +315,21 @@ if st.button("▶️ Run Matching Search"):
                 done += 1
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
-    if run_list2_only:
-        combined = list2_add + [-v for v in list2_sub]
-        for r in range(2, 6):
-            for combo in itertools.combinations_with_replacement(combined, r):
-                add_result(f"List2 {combo}", sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+if run_list2_only:
+    n = len(main_list)
+    ...
+    # prefix sums built from main_list
+    prefix = [0.0]
+    for x in main_list:
+        prefix.append(prefix[-1] + float(x))
+
+    # loop over fragments of main_list
+    for start in range(n):
+        for end in range(start + 1, n + 1):
+            frag_sum = prefix[end] - prefix[start]
+            frag_label = f"{start + 1}-{end}"
+            ...
+
 
     progress.progress(1.0)
 
