@@ -315,34 +315,25 @@ if st.button("▶️ Run Matching Search"):
                 done += 1
                 if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
 
-       if run_list2_only:
+    if run_list2_only:
         # ==========================================
         # New behaviour: fragments of main_list
-        # with optional additions/subtractions from list2,
-        # and one-time substitution by neighbour AA
-        # (with optional list2 mods).
+        # with optional modifications (list2)
+        # and optional single substitution.
         # ==========================================
         n = len(main_list)
-
-        # --- Precompute main masses as a set (for skipping overlaps) ---
-        main_masses_set = {round(float(x), 6) for x in main_list}
 
         # --- Build signed modifiers from list2 ---
         #  +x : only added
         #  -x : only subtracted
-        #   x : can be added (+x) or subtracted (-x),
-        #       BUT if |x| is in main_list, skip it completely.
+        #   x : can be added (+x) or subtracted (-x)
         signed_mods = []
         seen = set()
 
         # positive shifts from list2_add
         for v in list2_add:
             v = float(v)
-            mag = round(abs(v), 6)
-            # skip modifiers whose magnitude is in main_list
-            if mag in main_masses_set:
-                continue
-            key = ('+', mag)
+            key = ('+', round(v, 6))
             if key not in seen:
                 seen.add(key)
                 signed_mods.append(v)      # +v
@@ -350,11 +341,7 @@ if st.button("▶️ Run Matching Search"):
         # negative shifts from list2_sub
         for v in list2_sub:
             v = float(v)
-            mag = round(abs(v), 6)
-            # skip modifiers whose magnitude is in main_list
-            if mag in main_masses_set:
-                continue
-            key = ('-', mag)
+            key = ('-', round(v, 6))
             if key not in seen:
                 seen.add(key)
                 signed_mods.append(-v)     # -v
@@ -374,56 +361,49 @@ if st.button("▶️ Run Matching Search"):
                 frag_sum = prefix[end] - prefix[start]
                 frag_label = f"{start + 1}-{end}"  # e.g. "1-8", "3-4"
 
-                # ── 0) Fragment only (no modification, no substitution) ──
+                # ── 0) Fragment only (no modification) ──
                 add_result(f"frag {frag_label}", frag_sum, [], results)
                 done += 1
                 if done % 200 == 0:
                     progress.progress(min(done / 5000, 1.0))
 
-                # ── 1) Fragment + list2 additions/subtractions (no substitution) ──
-                if signed_mods:
-                    # 1a. Fragment + ONE modification from list2
-                    for m in signed_mods:
-                        val = frag_sum + m
-                        desc = f"frag {frag_label} {m:+.5f}"
-                        add_result(desc, val, [m], results)
+                # If there are no modifiers at all, skip mod logic
+                if not signed_mods:
+                    continue
+
+                # ── 1) Fragment + ONE modification from list2 ──
+                for m in signed_mods:
+                    val = frag_sum + m
+                    desc = f"frag {frag_label} {m:+.5f}"
+                    add_result(desc, val, [m], results)
+                    done += 1
+                    if done % 200 == 0:
+                        progress.progress(min(done / 5000, 1.0))
+
+                # ── 2) Fragment + TWO modifications from list2 ──
+                # maximum of 2 modifiers, can be same number twice
+                for i_m, m1 in enumerate(signed_mods):
+                    for m2 in signed_mods[i_m:]:
+                        total_mod = m1 + m2
+                        val = frag_sum + total_mod
+                        desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
+                        add_result(desc, val, [m1, m2], results)
                         done += 1
                         if done % 200 == 0:
                             progress.progress(min(done / 5000, 1.0))
 
-                    # 1b. Fragment + TWO modifications from list2
-                    # maximum of 2 modifiers, can be same number twice
-                    for i_m, m1 in enumerate(signed_mods):
-                        for m2 in signed_mods[i_m:]:
-                            total_mod = m1 + m2
-                            val = frag_sum + total_mod
-                            desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
-                            add_result(desc, val, [m1, m2], results)
-                            done += 1
-                            if done % 200 == 0:
-                                progress.progress(min(done / 5000, 1.0))
-
-                # ── 2) Single substitution inside fragment ──
+                # ── 3) Single substitution inside fragment ──
                 # pick one position in the fragment, replace its AA mass
-                # ONLY by neighbour in the peptide (k-1 or k+1),
-                # then optionally add 0/1/2 list2 modifications.
+                # with another AA mass from main_list (one-time substitution),
+                # with or without the same modifications as above.
                 for k in range(start, end):
                     old_mass = float(main_list[k])
                     pos_in_frag = k - start + 1  # position inside fragment, 1-based
 
-                    # determine neighbour indices in the full main_list sequence
-                    neighbour_indices = []
-                    if k - 1 >= 0:
-                        neighbour_indices.append(k - 1)
-                    if k + 1 < n:
-                        neighbour_indices.append(k + 1)
-
-                    for neigh_idx in neighbour_indices:
-                        subst_mass = float(main_list[neigh_idx])
-
-                        # if neighbour mass is identical, substitution does nothing;
-                        # you can skip it to avoid duplicates
-                        if abs(subst_mass - old_mass) < 1e-9:
+                    for subst_idx, subst_mass_raw in enumerate(main_list):
+                        subst_mass = float(subst_mass_raw)
+                        # skip trivial case (same position & same mass)
+                        if subst_idx == k and abs(subst_mass - old_mass) < 1e-9:
                             continue
 
                         # base mass after substitution:
@@ -434,16 +414,13 @@ if st.button("▶️ Run Matching Search"):
                             f"{old_mass:.5f}->{subst_mass:.5f}"
                         )
 
-                        # 2a. substitution ONLY (no list2 modifications)
+                        # 3a. substitution only (no list2 modification)
                         add_result(base_desc, sub_base, [sub_base - frag_sum], results)
                         done += 1
                         if done % 200 == 0:
                             progress.progress(min(done / 5000, 1.0))
 
-                        if not signed_mods:
-                            continue
-
-                        # 2b. substitution + ONE list2 modification
+                        # 3b. substitution + ONE modification
                         for m in signed_mods:
                             val = sub_base + m
                             desc = f"{base_desc} {m:+.5f}"
@@ -452,7 +429,7 @@ if st.button("▶️ Run Matching Search"):
                             if done % 200 == 0:
                                 progress.progress(min(done / 5000, 1.0))
 
-                        # 2c. substitution + TWO list2 modifications
+                        # 3c. substitution + TWO modifications
                         for i_m, m1 in enumerate(signed_mods):
                             for m2 in signed_mods[i_m:]:
                                 total_mod = m1 + m2
@@ -467,7 +444,6 @@ if st.button("▶️ Run Matching Search"):
                                 done += 1
                                 if done % 200 == 0:
                                     progress.progress(min(done / 5000, 1.0))
-
 
 
     progress.progress(1.0)
