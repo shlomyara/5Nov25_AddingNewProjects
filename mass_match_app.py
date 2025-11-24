@@ -115,10 +115,10 @@ def delete_global_name(number):
 
 def get_global_name(num):
     """
-    Global name logic:
-    - If table has +x  -> used only for +x
-    - If table has -x  -> used only for -x
-    - If table has  x  -> used for both +x and -x:
+    Global name logic (using app 'tolerance'):
+    - If table has +x  -> used only for +x  (within ±tolerance)
+    - If table has -x  -> used only for -x  (within ±tolerance)
+    - If table has  x  -> used for both +x and -x (within ±tolerance):
         +x  -> '+name'
         -x  -> '-name'
     """
@@ -126,6 +126,13 @@ def get_global_name(num):
         num_f = float(num)
     except:
         return None
+
+    # Use the same tolerance as the main mass matching.
+    # If for some reason 'tolerance' is not defined yet, fall back to a tiny value.
+    try:
+        tol_val = float(tolerance)
+    except Exception:
+        tol_val = 1e-5
 
     signed_match = None
     unsigned_match = None
@@ -137,31 +144,34 @@ def get_global_name(num):
         except:
             continue
 
-        # 1) Exact signed match (e.g. "+1.008" or "-1.008" stored)
-        if abs(k_val - num_f) < 1e-5:
-            signed_match = v
-            continue
+        # 1) Signed entries: keys that explicitly start with + or -
+        #    Only match when the signed value is close within tol_val.
+        if k_str.startswith(('+', '-')):
+            if abs(k_val - num_f) <= tol_val:
+                signed_match = v
+                continue
 
-        # 2) Unsigned entries: those without leading +/-
-        #    If |k_val| == |num_f|, they can match either +x or -x
-        if not k_str.startswith(('+', '-')):
-            if abs(abs(k_val) - abs(num_f)) < 1e-5:
+        # 2) Unsigned entries: keys without leading +/-
+        #    They can match both +x and -x by magnitude within tol_val.
+        else:
+            if abs(abs(k_val) - abs(num_f)) <= tol_val:
                 unsigned_match = v
 
     # Prefer exact signed match if it exists
     if signed_match is not None:
         return signed_match
 
-    # Otherwise use unsigned rule (no sign in table)
+    # Otherwise use unsigned rule (no sign stored in table)
     if unsigned_match is not None:
         if num_f < 0:
-            # negative shift: prefix "-" to the name
+            # negative result -> '-name'
             return "-" + unsigned_match
         else:
-            # positive shift: prefix "+" to the name (as you requested)
+            # positive result -> '+name'
             return "+" + unsigned_match
 
     return None
+
 
 
 GLOBAL_NAME_MAP = load_global_names()
