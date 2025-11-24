@@ -2,6 +2,7 @@ import streamlit as st
 import itertools, json, pandas as pd
 from supabase import create_client, Client
 from streamlit.runtime.scriptrunner import RerunException, get_script_run_ctx
+import re  # for extracting numbers from description strings
 
 # ════════════════════════════════════════════════
 # 🔐 Secure Supabase connection (via Streamlit Secrets)
@@ -136,7 +137,9 @@ data_config = load_datasets()
 # ────────────── Manage Global Names ──────────────
 with st.expander("🧩 Manage Global Modifier Names", expanded=False):
     if GLOBAL_NAME_MAP:
-        st.table(pd.DataFrame([{"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))]))
+        st.table(pd.DataFrame(
+            [{"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))]
+        ))
     num_val = st.text_input("Number (e.g. -1.007)")
     name_val = st.text_input("Description (e.g. Hydrogen loss)")
     if st.button("💾 Save Name"):
@@ -151,7 +154,6 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
                 st.success(f"Deleted {del_key}")
                 rerun()
 
-# ────────────── Add Dataset ──────────────
 # ────────────── Add New Dataset (Collapsible) ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
     st.markdown("You can **add a dataset manually** or **upload from a 2-column CSV file** (Column A = main list, Column B = modifiers).")
@@ -208,7 +210,6 @@ with st.expander("➕ Add New Dataset", expanded=False):
         except Exception as e:
             st.error(f"Error saving dataset: {e}")
 
-
 # ────────────── Select Dataset ──────────────
 if not data_config:
     st.info("No datasets found.")
@@ -250,7 +251,7 @@ with st.expander("⚙️ Combination Settings", expanded=False):
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers
 # ════════════════════════════════════════════════
-def within_tolerance(value): 
+def within_tolerance(value):
     return abs(value - target) <= tolerance
 
 def add_result(desc, val, steps, results):
@@ -297,14 +298,16 @@ if st.button("▶️ Run Matching Search"):
             for combo in itertools.combinations_with_replacement(list2_add, r):
                 add_result(f"+{combo}", total_main + sum(combo), combo, results)
                 done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
 
     if run_subtractions:
         for r in range(1, 4):
             for combo in itertools.combinations(list2_sub, r):
                 add_result(f"-{combo}", total_main - sum(combo), combo, results)
                 done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
 
     if run_sub_add:
         for sub in list2_sub:
@@ -313,8 +316,10 @@ if st.button("▶️ Run Matching Search"):
                     continue
                 add_result(f"-({sub},) +({add},)", total_main - sub + add, [sub, add], results)
                 done += 1
-                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
 
+    # ────────────── NEW List2-only logic ──────────────
     if run_list2_only:
         # ==========================================
         # New behaviour: fragments of main_list
@@ -422,7 +427,7 @@ if st.button("▶️ Run Matching Search"):
                         subst_mass = float(main_list[neigh_idx])
 
                         # if neighbour mass is identical, substitution does nothing;
-                        # you can skip it to avoid duplicates
+                        # skip to avoid duplicates
                         if abs(subst_mass - old_mass) < 1e-9:
                             continue
 
@@ -468,21 +473,22 @@ if st.button("▶️ Run Matching Search"):
                                 if done % 200 == 0:
                                     progress.progress(min(done / 5000, 1.0))
 
-
-
     progress.progress(1.0)
 
     if results:
         st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
-            nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",") if x.strip().replace('.', '', 1).isdigit()]
+
+            # Extract all numeric tokens (with optional sign) from the description
+            nums = [float(m) for m in re.findall(r'[-+]?\d*\.?\d+', str(desc))]
             for n in nums:
                 nm = get_global_name(n)
                 if nm:
                     st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
+
 
 
 
