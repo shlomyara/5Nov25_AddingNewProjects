@@ -114,13 +114,55 @@ def delete_global_name(number):
         return False
 
 def get_global_name(num):
+    """
+    Global name logic:
+    - If table has +x  -> used only for +x
+    - If table has -x  -> used only for -x
+    - If table has  x  -> used for both +x and -x:
+        +x  -> '+name'
+        -x  -> '-name'
+    """
+    try:
+        num_f = float(num)
+    except:
+        return None
+
+    signed_match = None
+    unsigned_match = None
+
     for k, v in GLOBAL_NAME_MAP.items():
+        k_str = str(k).strip()
         try:
-            if abs(float(k) - float(num)) < 1e-5:
-                return v
+            k_val = float(k_str)
         except:
             continue
+
+        # 1) Exact signed match (e.g. "+1.008" or "-1.008" stored)
+        if abs(k_val - num_f) < 1e-5:
+            signed_match = v
+            continue
+
+        # 2) Unsigned entries: those without leading +/-
+        #    If |k_val| == |num_f|, they can match either +x or -x
+        if not k_str.startswith(('+', '-')):
+            if abs(abs(k_val) - abs(num_f)) < 1e-5:
+                unsigned_match = v
+
+    # Prefer exact signed match if it exists
+    if signed_match is not None:
+        return signed_match
+
+    # Otherwise use unsigned rule (no sign in table)
+    if unsigned_match is not None:
+        if num_f < 0:
+            # negative shift: prefix "-" to the name
+            return "-" + unsigned_match
+        else:
+            # positive shift: prefix "+" to the name (as you requested)
+            return "+" + unsigned_match
+
     return None
+
 
 GLOBAL_NAME_MAP = load_global_names()
 
