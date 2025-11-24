@@ -136,10 +136,14 @@ data_config = load_datasets()
 
 # ────────────── Manage Global Names ──────────────
 with st.expander("🧩 Manage Global Modifier Names", expanded=False):
+    # Current global modifiers table
     if GLOBAL_NAME_MAP:
         st.table(pd.DataFrame(
             [{"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))]
         ))
+
+    # ────────────── Manual add / update ──────────────
+    st.markdown("### ➕ Add / update a single modifier")
     num_val = st.text_input("Number (e.g. -1.007)")
     name_val = st.text_input("Description (e.g. Hydrogen loss)")
     if st.button("💾 Save Name"):
@@ -147,12 +151,68 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
             if save_global_name(num_val.strip(), name_val.strip()):
                 st.success(f"Saved {num_val} → {name_val}")
                 rerun()
+        else:
+            st.warning("Please fill both Number and Description.")
+
+    # ────────────── Delete a modifier ──────────────
     del_key = st.selectbox("🗑️ Delete a name", ["-- Select --"] + list(GLOBAL_NAME_MAP.keys()))
     if st.button("Delete Selected"):
         if del_key != "-- Select --":
             if delete_global_name(del_key):
                 st.success(f"Deleted {del_key}")
                 rerun()
+
+    # ────────────── NEW: Upload modifiers from CSV ──────────────
+    st.divider()
+    st.markdown("### 📂 Upload modifiers from CSV")
+    st.markdown(
+        "CSV format: **first column = Number**, **second column = Name**. "
+        "Additional columns (if any) will be ignored."
+    )
+
+    mod_csv = st.file_uploader(
+        "Upload CSV of global modifiers",
+        type=["csv"],
+        key="global_mod_csv"
+    )
+
+    if mod_csv is not None:
+        try:
+            gdf = pd.read_csv(mod_csv)
+
+            if len(gdf.columns) < 2:
+                st.error("❌ The CSV must have at least two columns (Number, Name).")
+            else:
+                col_num = gdf.columns[0]
+                col_name = gdf.columns[1]
+
+                st.success(f"✅ Loaded {len(gdf)} rows from `{mod_csv.name}`")
+                st.write("**Preview (first 5 rows):**")
+                st.dataframe(gdf[[col_num, col_name]].head())
+
+                if st.button("💾 Save all modifiers from CSV"):
+                    count = 0
+                    for _, row in gdf.iterrows():
+                        num_raw = row[col_num]
+                        name_raw = row[col_name]
+
+                        if pd.isna(num_raw) or pd.isna(name_raw):
+                            continue
+
+                        num_str = str(num_raw).strip()
+                        name_str = str(name_raw).strip()
+
+                        if not num_str or not name_str:
+                            continue
+
+                        if save_global_name(num_str, name_str):
+                            count += 1
+
+                    st.success(f"✅ Saved / updated {count} modifiers from CSV.")
+                    rerun()
+        except Exception as e:
+            st.error(f"Failed to read CSV: {e}")
+
 
 # ────────────── Add New Dataset (Collapsible) ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
