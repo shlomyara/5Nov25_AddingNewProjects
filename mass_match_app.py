@@ -136,9 +136,7 @@ data_config = load_datasets()
 # ────────────── Manage Global Names ──────────────
 with st.expander("🧩 Manage Global Modifier Names", expanded=False):
     if GLOBAL_NAME_MAP:
-        st.table(pd.DataFrame(
-            [{"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))]
-        ))
+        st.table(pd.DataFrame([{"Number": k, "Name": v} for k, v in sorted(GLOBAL_NAME_MAP.items(), key=lambda x: float(x[0]))]))
     num_val = st.text_input("Number (e.g. -1.007)")
     name_val = st.text_input("Description (e.g. Hydrogen loss)")
     if st.button("💾 Save Name"):
@@ -159,6 +157,308 @@ with st.expander("➕ Add New Dataset", expanded=False):
     st.markdown("You can **add a dataset manually** or **upload from a 2-column CSV file** (Column A = main list, Column B = modifiers).")
 
     # --- Option 1: Manual Entry ---
+    name = st.text_input("Dataset name")
+    main_text = st.text_area("Main list values (comma or newline separated)")
+    list2_text = st.text_area("List2 modifiers (optional, use + or - signs)")
+
+    # --- Option 2: CSV Upload ---
+    st.divider()
+    st.markdown("### 📂 Or upload a 2-column CSV file")
+    uploaded_file = st.file_uploader("Upload CSV (2 columns only)", type=["csv"])
+
+    if uploaded_file is not None:
+        try:
+            df = pd.read_csv(uploaded_file)
+            if len(df.columns) < 2:
+                st.error("❌ The CSV must have at least two columns (A and B).")
+            else:
+                colA = df.columns[0]
+                colB = df.columns[1]
+                list_A = df[colA].dropna().astype(str).tolist()
+                list_B = df[colB].dropna().astype(str).tolist()
+
+                st.success(f"✅ Loaded {len(list_A)} main values and {len(list_B)} modifiers from `{uploaded_file.name}`")
+                st.write("**Preview:**")
+                st.dataframe(df.head())
+
+                # Optional: Fill inputs automatically
+                if not main_text and not list2_text:
+                    main_text = ", ".join(list_A)
+                    list2_text = ", ".join(list_B)
+
+                # Display combined summary
+                st.markdown(f"**Main list (A):** {', '.join(list_A[:10])} ...")
+                st.markdown(f"**List2 (B):** {', '.join(list_B[:10])} ...")
+        except Exception as e:
+            st.error(f"Failed to read CSV: {e}")
+
+    # --- Save Dataset Button ---
+    st.divider()
+    if st.button("💾 Save Dataset"):
+        try:
+            main_list = [float(x.strip()) for x in main_text.replace("\n", ",").split(",") if x.strip()]
+            list2_list = [x.strip() for x in list2_text.replace("\n", ",").split(",") if x.strip()] or main_list
+
+            if name:
+                if save_dataset(name, main_list, list2_list):
+                    st.success(f"✅ Dataset '{name}' saved to cloud.")
+                    rerun()
+            else:
+                st.warning("Please enter a dataset name.")
+        except Exception as e:
+            st.error(f"Error saving dataset: {e}")
+
+
+# ────────────── Select Dataset ──────────────
+if not data_config:
+    st.info("No datasets found.")
+    st.stop()
+
+st.divider()
+selected_name = st.selectbox("Select dataset to use:", list(data_config.keys()))
+selected_data = data_config[selected_name]
+main_list = selected_data["main"]
+list2_raw = selected_data["list2_raw"]
+st.markdown(f"**Using dataset:** `{selected_name}`  ({len(main_list)} main, {len(list2_raw)} modifiers)")
+
+# ────────────── Manage Datasets ──────────────
+with st.expander("🛠 Manage Datasets", expanded=False):
+    manage_name = st.selectbox("Choose dataset to manage:", list(data_config.keys()), key="manage")
+    col1, col2 = st.columns(2)
+    with col1:
+        new_name = st.text_input(f"Rename '{manage_name}' to:", "")
+        if st.button("Rename"):
+            if new_name:
+                rename_dataset(manage_name, new_name)
+                st.success(f"Renamed '{manage_name}' → '{new_name}'")
+                rerun()
+    with col2:
+        confirm = st.checkbox(f"Confirm delete '{manage_name}'", key="confirm")
+        if st.button("Delete"):
+            if confirm:
+                delete_dataset(manage_name)
+                rerun()
+
+# ────────────── Combination Settings ──────────────
+with st.expander("⚙️ Combination Settings", expanded=False):
+    run_main_only = st.checkbox(f"{selected_name} only", True)
+    run_additions = st.checkbox("Include + modifiers", True)
+    run_subtractions = st.checkbox("Include - modifiers", True)
+    run_sub_add = st.checkbox("Include - and + combined", True)
+    run_list2_only = st.checkbox("List2-only combos", False)
+
+# ════════════════════════════════════════════════
+# 🧠 Calculation Helpers
+# ════════════════════════════════════════════════
+def within_tolerance(value): 
+    return abs(value - target) <= tolerance
+
+def add_result(desc, val, steps, results):
+    if within_tolerance(val):
+        err = abs(val - target)
+        results.append((len(steps), err, desc, val, err))
+
+# --- Parse modifiers (handles extra quotes & exact Code 1 behaviour) ---
+list2_add, list2_sub = [], []
+
+for item in list2_raw:
+    # Normalize weird Supabase cases like "'+56.06'"
+    s = str(item).strip().strip("'").strip('"')
+    try:
+        if s.startswith('+'):
+            list2_add.append(float(s[1:]))
+        elif s.startswith('-'):
+            list2_sub.append(abs(float(s)))
+        else:
+            val = float(s)
+            if val >= 0:
+                list2_add.append(val)
+                list2_sub.append(val)
+            else:
+                list2_sub.append(abs(val))
+    except ValueError:
+        pass
+
+# ════════════════════════════════════════════════
+# ▶️ Run Match Search
+# ════════════════════════════════════════════════
+st.divider()
+if st.button("▶️ Run Matching Search"):
+    results = []
+    total_main = sum(main_list)
+    progress = st.progress(0)
+    done = 0
+
+    if run_main_only:
+        add_result(f"{selected_name} only", total_main, [], results)
+
+    if run_additions:
+        for r in range(1, 4):
+            for combo in itertools.combinations_with_replacement(list2_add, r):
+                add_result(f"+{combo}", total_main + sum(combo), combo, results)
+                done += 1
+                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+
+    if run_subtractions:
+        for r in range(1, 4):
+            for combo in itertools.combinations(list2_sub, r):
+                add_result(f"-{combo}", total_main - sum(combo), combo, results)
+                done += 1
+                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+
+    if run_sub_add:
+        for sub in list2_sub:
+            for add in list2_add:
+                if sub == add:
+                    continue
+                add_result(f"-({sub},) +({add},)", total_main - sub + add, [sub, add], results)
+                done += 1
+                if done % 200 == 0: progress.progress(min(done / 5000, 1.0))
+
+    if run_list2_only:
+        # ==========================================
+        # New behaviour: fragments of main_list
+        # with optional modifications (list2)
+        # and optional single substitution.
+        # ==========================================
+        n = len(main_list)
+
+        # --- Build signed modifiers from list2 ---
+        #  +x : only added
+        #  -x : only subtracted
+        #   x : can be added (+x) or subtracted (-x)
+        signed_mods = []
+        seen = set()
+
+        # positive shifts from list2_add
+        for v in list2_add:
+            v = float(v)
+            key = ('+', round(v, 6))
+            if key not in seen:
+                seen.add(key)
+                signed_mods.append(v)      # +v
+
+        # negative shifts from list2_sub
+        for v in list2_sub:
+            v = float(v)
+            key = ('-', round(v, 6))
+            if key not in seen:
+                seen.add(key)
+                signed_mods.append(-v)     # -v
+
+        # --- Prefix sums to get fragment masses quickly ---
+        prefix = [0.0]
+        for x in main_list:
+            prefix.append(prefix[-1] + float(x))
+
+        # ==========================================
+        # Loop over all contiguous fragments i..j
+        # positions are 1-based in the description
+        # ==========================================
+        for start in range(n):
+            for end in range(start + 1, n + 1):
+                # fragment main_list[start:end]
+                frag_sum = prefix[end] - prefix[start]
+                frag_label = f"{start + 1}-{end}"  # e.g. "1-8", "3-4"
+
+                # ── 0) Fragment only (no modification) ──
+                add_result(f"frag {frag_label}", frag_sum, [], results)
+                done += 1
+                if done % 200 == 0:
+                    progress.progress(min(done / 5000, 1.0))
+
+                # If there are no modifiers at all, skip mod logic
+                if not signed_mods:
+                    continue
+
+                # ── 1) Fragment + ONE modification from list2 ──
+                for m in signed_mods:
+                    val = frag_sum + m
+                    desc = f"frag {frag_label} {m:+.5f}"
+                    add_result(desc, val, [m], results)
+                    done += 1
+                    if done % 200 == 0:
+                        progress.progress(min(done / 5000, 1.0))
+
+                # ── 2) Fragment + TWO modifications from list2 ──
+                # maximum of 2 modifiers, can be same number twice
+                for i_m, m1 in enumerate(signed_mods):
+                    for m2 in signed_mods[i_m:]:
+                        total_mod = m1 + m2
+                        val = frag_sum + total_mod
+                        desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
+                        add_result(desc, val, [m1, m2], results)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
+                # ── 3) Single substitution inside fragment ──
+                # pick one position in the fragment, replace its AA mass
+                # with another AA mass from main_list (one-time substitution),
+                # with or without the same modifications as above.
+                for k in range(start, end):
+                    old_mass = float(main_list[k])
+                    pos_in_frag = k - start + 1  # position inside fragment, 1-based
+
+                    for subst_idx, subst_mass_raw in enumerate(main_list):
+                        subst_mass = float(subst_mass_raw)
+                        # skip trivial case (same position & same mass)
+                        if subst_idx == k and abs(subst_mass - old_mass) < 1e-9:
+                            continue
+
+                        # base mass after substitution:
+                        # frag_sum - old + new
+                        sub_base = frag_sum - old_mass + subst_mass
+                        base_desc = (
+                            f"frag {frag_label} subst pos{pos_in_frag} "
+                            f"{old_mass:.5f}->{subst_mass:.5f}"
+                        )
+
+                        # 3a. substitution only (no list2 modification)
+                        add_result(base_desc, sub_base, [sub_base - frag_sum], results)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
+                        # 3b. substitution + ONE modification
+                        for m in signed_mods:
+                            val = sub_base + m
+                            desc = f"{base_desc} {m:+.5f}"
+                            add_result(desc, val, [sub_base - frag_sum, m], results)
+                            done += 1
+                            if done % 200 == 0:
+                                progress.progress(min(done / 5000, 1.0))
+
+                        # 3c. substitution + TWO modifications
+                        for i_m, m1 in enumerate(signed_mods):
+                            for m2 in signed_mods[i_m:]:
+                                total_mod = m1 + m2
+                                val = sub_base + total_mod
+                                desc = f"{base_desc} {m1:+.5f} {m2:+.5f}"
+                                add_result(
+                                    desc,
+                                    val,
+                                    [sub_base - frag_sum, m1, m2],
+                                    results,
+                                )
+                                done += 1
+                                if done % 200 == 0:
+                                    progress.progress(min(done / 5000, 1.0))
+
+
+    progress.progress(1.0)
+
+    if results:
+        st.success(f"✅ Found {len(results)} matches within ±{tolerance:.5f}")
+        for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
+            st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
+            nums = [float(x) for x in str(desc).replace("(", "").replace(")", "").replace("+", "").replace("-", "").split(",") if x.strip().replace('.', '', 1).isdigit()]
+            for n in nums:
+                nm = get_global_name(n)
+                if nm:
+                    st.caption(f"↳ {n} → {nm}")
+    else:
+        st.warning("No matches found.")
 
 
 
