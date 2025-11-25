@@ -629,7 +629,6 @@ if st.button("▶️ Run Matching Search"):
                 for nm in name_list:
                     st.caption(f"↳ {n} → {nm}")
 
-                    st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
 
