@@ -355,7 +355,7 @@ with st.expander("⚙️ Combination Settings", expanded=False):
     run_additions = st.checkbox("Include + modifiers", True)
     run_subtractions = st.checkbox("Include - modifiers", True)
     run_sub_add = st.checkbox("Include - and + combined", True)
-    run_list2_only = st.checkbox("List2-only combos", False)
+    run_list2_only = st.checkbox("Shorters-combos", False)
 
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers
