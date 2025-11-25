@@ -169,8 +169,6 @@ def get_global_name(num):
 
     return unique_matches
 
-
-
 GLOBAL_NAME_MAP = load_global_names()
 
 # ════════════════════════════════════════════════
@@ -178,7 +176,29 @@ GLOBAL_NAME_MAP = load_global_names()
 # ════════════════════════════════════════════════
 st.title("🧬🔍 MassMatchFinder — NewProjects")
 
-target = st.number_input("🎯 Target mass", format="%.5f")
+# --- New: choose input type: direct mass or m/z + charge ---
+input_mode = st.radio(
+    "Input type",
+    ["Mass", "m/z"],
+    index=0,
+    horizontal=True,
+)
+
+target_mass_direct = None
+mz_value = None
+selected_charges = []
+
+if input_mode == "Mass":
+    target_mass_direct = st.number_input("🎯 Target mass", format="%.5f", key="target_mass")
+else:
+    mz_value = st.number_input("📡 m/z", format="%.5f", key="mz_value")
+    st.markdown("**Charge states to use (1–5):**")
+    charge_cols = st.columns(5)
+    for i, z in enumerate(range(1, 6)):
+        with charge_cols[i]:
+            if st.checkbox(f"z={z}", value=(z == 1), key=f"charge_{z}"):
+                selected_charges.append(z)
+
 tolerance = st.number_input("🎯 Tolerance ±", value=0.1, format="%.5f")
 
 data_config = load_datasets()
@@ -261,7 +281,6 @@ with st.expander("🧩 Manage Global Modifier Names", expanded=False):
                     rerun()
         except Exception as e:
             st.error(f"Failed to read CSV: {e}")
-
 
 # ────────────── Add New Dataset (Collapsible) ──────────────
 with st.expander("➕ Add New Dataset", expanded=False):
@@ -360,13 +379,14 @@ with st.expander("⚙️ Combination Settings", expanded=False):
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers
 # ════════════════════════════════════════════════
-def within_tolerance(value):
-    return abs(value - target) <= tolerance
+def within_tolerance(value, target_mass):
+    return abs(value - target_mass) <= tolerance
 
-def add_result(desc, val, steps, results):
-    if within_tolerance(val):
-        err = abs(val - target)
-        results.append((len(steps), err, desc, val, err))
+def add_result(desc, val, steps, results, target_mass, prefix=None):
+    if within_tolerance(val, target_mass):
+        err = abs(val - target_mass)
+        full_desc = desc if not prefix else f"[{prefix}] {desc}"
+        results.append((len(steps), err, full_desc, val, err))
 
 # --- Parse modifiers (handles extra quotes & exact Code 1 behaviour) ---
 list2_add, list2_sub = [], []
@@ -394,193 +414,208 @@ for item in list2_raw:
 # ════════════════════════════════════════════════
 st.divider()
 if st.button("▶️ Run Matching Search"):
+    # Build list of target masses to search
+    target_pairs = []  # list of (target_mass, prefix_str)
+
+    if input_mode == "Mass":
+        if target_mass_direct is None:
+            st.warning("Please enter a target mass.")
+        else:
+            target_pairs.append((float(target_mass_direct), None))
+    else:
+        if mz_value is None:
+            st.warning("Please enter an m/z value.")
+        else:
+            if not selected_charges:
+                st.warning("Please select at least one charge state.")
+            else:
+                for z in selected_charges:
+                    # Generalized rule: neutral mass ~ m/z * z - z
+                    target_mass = float(mz_value) * z - z
+                    prefix = f"m/z={mz_value:.5f}, z={z}"
+                    target_pairs.append((target_mass, prefix))
+
     results = []
     total_main = sum(main_list)
     progress = st.progress(0)
     done = 0
 
-    if run_main_only:
-        add_result(f"{selected_name} only", total_main, [], results)
+    if target_pairs:
+        for target_mass, prefix in target_pairs:
+            # Main-only
+            if run_main_only:
+                add_result(f"{selected_name} only", total_main, [], results, target_mass, prefix)
 
-    if run_additions:
-        for r in range(1, 4):
-            for combo in itertools.combinations_with_replacement(list2_add, r):
-                add_result(f"+{combo}", total_main + sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0:
-                    progress.progress(min(done / 5000, 1.0))
-
-    if run_subtractions:
-        for r in range(1, 4):
-            for combo in itertools.combinations(list2_sub, r):
-                add_result(f"-{combo}", total_main - sum(combo), combo, results)
-                done += 1
-                if done % 200 == 0:
-                    progress.progress(min(done / 5000, 1.0))
-
-    if run_sub_add:
-        for sub in list2_sub:
-            for add in list2_add:
-                if sub == add:
-                    continue
-                add_result(f"-({sub},) +({add},)", total_main - sub + add, [sub, add], results)
-                done += 1
-                if done % 200 == 0:
-                    progress.progress(min(done / 5000, 1.0))
-
-    # ────────────── NEW List2-only logic ──────────────
-    if run_list2_only:
-        # ==========================================
-        # New behaviour: fragments of main_list
-        # with optional additions/subtractions from list2,
-        # and one-time substitution by neighbour AA
-        # (with optional list2 mods).
-        # ==========================================
-        n = len(main_list)
-
-        # --- Precompute main masses as a set (for skipping overlaps) ---
-        main_masses_set = {round(float(x), 6) for x in main_list}
-
-        # --- Build signed modifiers from list2 ---
-        #  +x : only added
-        #  -x : only subtracted
-        #   x : can be added (+x) or subtracted (-x),
-        #       BUT if |x| is in main_list, skip it completely.
-        signed_mods = []
-        seen = set()
-
-        # positive shifts from list2_add
-        for v in list2_add:
-            v = float(v)
-            mag = round(abs(v), 6)
-            # skip modifiers whose magnitude is in main_list
-            if mag in main_masses_set:
-                continue
-            key = ('+', mag)
-            if key not in seen:
-                seen.add(key)
-                signed_mods.append(v)      # +v
-
-        # negative shifts from list2_sub
-        for v in list2_sub:
-            v = float(v)
-            mag = round(abs(v), 6)
-            # skip modifiers whose magnitude is in main_list
-            if mag in main_masses_set:
-                continue
-            key = ('-', mag)
-            if key not in seen:
-                seen.add(key)
-                signed_mods.append(-v)     # -v
-
-        # --- Prefix sums to get fragment masses quickly ---
-        prefix = [0.0]
-        for x in main_list:
-            prefix.append(prefix[-1] + float(x))
-
-        # ==========================================
-        # Loop over all contiguous fragments i..j
-        # positions are 1-based in the description
-        # ==========================================
-        for start in range(n):
-            for end in range(start + 1, n + 1):
-                # fragment main_list[start:end]
-                frag_sum = prefix[end] - prefix[start]
-                frag_label = f"{start + 1}-{end}"  # e.g. "1-8", "3-4"
-
-                # ── 0) Fragment only (no modification, no substitution) ──
-                add_result(f"frag {frag_label}", frag_sum, [], results)
-                done += 1
-                if done % 200 == 0:
-                    progress.progress(min(done / 5000, 1.0))
-
-                # ── 1) Fragment + list2 additions/subtractions (no substitution) ──
-                if signed_mods:
-                    # 1a. Fragment + ONE modification from list2
-                    for m in signed_mods:
-                        val = frag_sum + m
-                        desc = f"frag {frag_label} {m:+.5f}"
-                        add_result(desc, val, [m], results)
+            # + modifiers
+            if run_additions:
+                for r in range(1, 4):
+                    for combo in itertools.combinations_with_replacement(list2_add, r):
+                        add_result(f"+{combo}", total_main + sum(combo), combo, results, target_mass, prefix)
                         done += 1
                         if done % 200 == 0:
                             progress.progress(min(done / 5000, 1.0))
 
-                    # 1b. Fragment + TWO modifications from list2
-                    # maximum of 2 modifiers, can be same number twice
-                    for i_m, m1 in enumerate(signed_mods):
-                        for m2 in signed_mods[i_m:]:
-                            total_mod = m1 + m2
-                            val = frag_sum + total_mod
-                            desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
-                            add_result(desc, val, [m1, m2], results)
-                            done += 1
-                            if done % 200 == 0:
-                                progress.progress(min(done / 5000, 1.0))
+            # - modifiers
+            if run_subtractions:
+                for r in range(1, 4):
+                    for combo in itertools.combinations(list2_sub, r):
+                        add_result(f"-{combo}", total_main - sum(combo), combo, results, target_mass, prefix)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
 
-                # ── 2) Single substitution inside fragment ──
-                # pick one position in the fragment, replace its AA mass
-                # ONLY by neighbour in the peptide (k-1 or k+1),
-                # then optionally add 0/1/2 list2 modifications.
-                for k in range(start, end):
-                    old_mass = float(main_list[k])
-                    pos_in_frag = k - start + 1  # position inside fragment, 1-based
-
-                    # determine neighbour indices in the full main_list sequence
-                    neighbour_indices = []
-                    if k - 1 >= 0:
-                        neighbour_indices.append(k - 1)
-                    if k + 1 < n:
-                        neighbour_indices.append(k + 1)
-
-                    for neigh_idx in neighbour_indices:
-                        subst_mass = float(main_list[neigh_idx])
-
-                        # if neighbour mass is identical, substitution does nothing;
-                        # skip to avoid duplicates
-                        if abs(subst_mass - old_mass) < 1e-9:
+            # - and +
+            if run_sub_add:
+                for sub in list2_sub:
+                    for add in list2_add:
+                        if sub == add:
                             continue
-
-                        # base mass after substitution:
-                        # frag_sum - old + new
-                        sub_base = frag_sum - old_mass + subst_mass
-                        base_desc = (
-                            f"frag {frag_label} subst pos{pos_in_frag} "
-                            f"{old_mass:.5f}->{subst_mass:.5f}"
+                        add_result(
+                            f"-({sub},) +({add},)",
+                            total_main - sub + add,
+                            [sub, add],
+                            results,
+                            target_mass,
+                            prefix,
                         )
-
-                        # 2a. substitution ONLY (no list2 modifications)
-                        add_result(base_desc, sub_base, [sub_base - frag_sum], results)
                         done += 1
                         if done % 200 == 0:
                             progress.progress(min(done / 5000, 1.0))
 
-                        if not signed_mods:
-                            continue
+            # ────────────── NEW Shorters-combos (List2-only logic) ──────────────
+            if run_list2_only:
+                # ==========================================
+                # Fragments of main_list with optional list2 mods
+                # and one-time substitution by neighbour AA.
+                # ==========================================
+                n = len(main_list)
 
-                        # 2b. substitution + ONE list2 modification
-                        for m in signed_mods:
-                            val = sub_base + m
-                            desc = f"{base_desc} {m:+.5f}"
-                            add_result(desc, val, [sub_base - frag_sum, m], results)
-                            done += 1
-                            if done % 200 == 0:
-                                progress.progress(min(done / 5000, 1.0))
+                # --- Precompute main masses as a set (for skipping overlaps) ---
+                main_masses_set = {round(float(x), 6) for x in main_list}
 
-                        # 2c. substitution + TWO list2 modifications
-                        for i_m, m1 in enumerate(signed_mods):
-                            for m2 in signed_mods[i_m:]:
-                                total_mod = m1 + m2
-                                val = sub_base + total_mod
-                                desc = f"{base_desc} {m1:+.5f} {m2:+.5f}"
-                                add_result(
-                                    desc,
-                                    val,
-                                    [sub_base - frag_sum, m1, m2],
-                                    results,
-                                )
+                # --- Build signed modifiers from list2 ---
+                signed_mods = []
+                seen = set()
+
+                # positive shifts from list2_add
+                for v in list2_add:
+                    v = float(v)
+                    mag = round(abs(v), 6)
+                    if mag in main_masses_set:
+                        continue
+                    key = ('+', mag)
+                    if key not in seen:
+                        seen.add(key)
+                        signed_mods.append(v)  # +v
+
+                # negative shifts from list2_sub
+                for v in list2_sub:
+                    v = float(v)
+                    mag = round(abs(v), 6)
+                    if mag in main_masses_set:
+                        continue
+                    key = ('-', mag)
+                    if key not in seen:
+                        seen.add(key)
+                        signed_mods.append(-v)  # -v
+
+                # --- Prefix sums to get fragment masses quickly ---
+                prefix_sums = [0.0]
+                for x in main_list:
+                    prefix_sums.append(prefix_sums[-1] + float(x))
+
+                # Loop over all contiguous fragments i..j
+                for start in range(n):
+                    for end in range(start + 1, n + 1):
+                        frag_sum = prefix_sums[end] - prefix_sums[start]
+                        frag_label = f"{start + 1}-{end}"
+
+                        # 0) fragment only
+                        add_result(f"frag {frag_label}", frag_sum, [], results, target_mass, prefix)
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
+                        # 1) fragment + list2 (no substitution)
+                        if signed_mods:
+                            # one modification
+                            for m in signed_mods:
+                                val = frag_sum + m
+                                desc = f"frag {frag_label} {m:+.5f}"
+                                add_result(desc, val, [m], results, target_mass, prefix)
                                 done += 1
                                 if done % 200 == 0:
                                     progress.progress(min(done / 5000, 1.0))
+
+                            # two modifications
+                            for i_m, m1 in enumerate(signed_mods):
+                                for m2 in signed_mods[i_m:]:
+                                    total_mod = m1 + m2
+                                    val = frag_sum + total_mod
+                                    desc = f"frag {frag_label} {m1:+.5f} {m2:+.5f}"
+                                    add_result(desc, val, [m1, m2], results, target_mass, prefix)
+                                    done += 1
+                                    if done % 200 == 0:
+                                        progress.progress(min(done / 5000, 1.0))
+
+                        # 2) single substitution inside fragment
+                        for k in range(start, end):
+                            old_mass = float(main_list[k])
+                            pos_in_frag = k - start + 1
+
+                            neighbour_indices = []
+                            if k - 1 >= 0:
+                                neighbour_indices.append(k - 1)
+                            if k + 1 < n:
+                                neighbour_indices.append(k + 1)
+
+                            for neigh_idx in neighbour_indices:
+                                subst_mass = float(main_list[neigh_idx])
+
+                                if abs(subst_mass - old_mass) < 1e-9:
+                                    continue
+
+                                sub_base = frag_sum - old_mass + subst_mass
+                                base_desc = (
+                                    f"frag {frag_label} subst pos{pos_in_frag} "
+                                    f"{old_mass:.5f}->{subst_mass:.5f}"
+                                )
+
+                                # substitution ONLY
+                                add_result(base_desc, sub_base, [sub_base - frag_sum], results, target_mass, prefix)
+                                done += 1
+                                if done % 200 == 0:
+                                    progress.progress(min(done / 5000, 1.0))
+
+                                if not signed_mods:
+                                    continue
+
+                                # substitution + one mod
+                                for m in signed_mods:
+                                    val = sub_base + m
+                                    desc = f"{base_desc} {m:+.5f}"
+                                    add_result(desc, val, [sub_base - frag_sum, m], results, target_mass, prefix)
+                                    done += 1
+                                    if done % 200 == 0:
+                                        progress.progress(min(done / 5000, 1.0))
+
+                                # substitution + two mods
+                                for i_m, m1 in enumerate(signed_mods):
+                                    for m2 in signed_mods[i_m:]:
+                                        total_mod = m1 + m2
+                                        val = sub_base + total_mod
+                                        desc = f"{base_desc} {m1:+.5f} {m2:+.5f}"
+                                        add_result(
+                                            desc,
+                                            val,
+                                            [sub_base - frag_sum, m1, m2],
+                                            results,
+                                            target_mass,
+                                            prefix,
+                                        )
+                                        done += 1
+                                        if done % 200 == 0:
+                                            progress.progress(min(done / 5000, 1.0))
 
     progress.progress(1.0)
 
@@ -589,14 +624,14 @@ if st.button("▶️ Run Matching Search"):
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
 
-                       # NEW: extract numeric tokens with correct sign, including cases like "-(15.977,)"
+            # Extract numeric tokens with correct sign, including cases like "-(15.977,)"
             raw = str(desc)
             nums = []
             for m in re.finditer(r'\d*\.?\d+', raw):
                 x_str = m.group()
-                val = float(x_str)
+                v = float(x_str)
 
-                # Default sign is +, but we inspect characters before the number
+                # Default sign is +, but inspect characters before the number
                 sign = 1.0
                 j = m.start() - 1
 
@@ -621,16 +656,16 @@ if st.button("▶️ Run Matching Search"):
                     elif j >= 0 and raw[j] == '+':
                         sign = 1.0
 
-                nums.append(sign * val)
+                nums.append(sign * v)
 
             # Show ALL matching names for each numeric value
             for n in nums:
                 name_list = get_global_name(n)
                 for nm in name_list:
                     st.caption(f"↳ {n} → {nm}")
-
     else:
         st.warning("No matches found.")
+
 
 
 
