@@ -116,26 +116,27 @@ def delete_global_name(number):
 def get_global_name(num):
     """
     Global name logic (using app 'tolerance'):
-    - If table has +x  -> used only for +x  (within ±tolerance)
-    - If table has -x  -> used only for -x  (within ±tolerance)
-    - If table has  x  -> used for both +x and -x (within ±tolerance):
-        +x  -> '+name'
-        -x  -> '-name'
+    - Signed entries in table:
+        '+x' -> match only positive shifts near +x
+        '-x' -> match only negative shifts near -x
+    - Unsigned entries 'x':
+        match both +x and -x by magnitude within ±tolerance:
+            +x -> '+name'
+            -x -> '-name'
+    - Returns *all* matching names as a list (may be multiple).
     """
     try:
         num_f = float(num)
     except:
-        return None
+        return []
 
     # Use the same tolerance as the main mass matching.
-    # If for some reason 'tolerance' is not defined yet, fall back to a tiny value.
     try:
         tol_val = float(tolerance)
     except Exception:
         tol_val = 1e-5
 
-    signed_match = None
-    unsigned_match = None
+    matches = []
 
     for k, v in GLOBAL_NAME_MAP.items():
         k_str = str(k).strip()
@@ -144,33 +145,29 @@ def get_global_name(num):
         except:
             continue
 
-        # 1) Signed entries: keys that explicitly start with + or -
-        #    Only match when the signed value is close within tol_val.
+        # Signed entries: explicit + or -
         if k_str.startswith(('+', '-')):
+            # Require the signed value to match within tol_val
             if abs(k_val - num_f) <= tol_val:
-                signed_match = v
-                continue
+                matches.append(v)
 
-        # 2) Unsigned entries: keys without leading +/-
-        #    They can match both +x and -x by magnitude within tol_val.
+        # Unsigned entries: can match both +x and -x by magnitude
         else:
             if abs(abs(k_val) - abs(num_f)) <= tol_val:
-                unsigned_match = v
+                if num_f < 0:
+                    matches.append("-" + v)
+                else:
+                    matches.append("+" + v)
 
-    # Prefer exact signed match if it exists
-    if signed_match is not None:
-        return signed_match
+    # Remove duplicates while preserving order
+    seen = set()
+    unique_matches = []
+    for m in matches:
+        if m not in seen:
+            seen.add(m)
+            unique_matches.append(m)
 
-    # Otherwise use unsigned rule (no sign stored in table)
-    if unsigned_match is not None:
-        if num_f < 0:
-            # negative result -> '-name'
-            return "-" + unsigned_match
-        else:
-            # positive result -> '+name'
-            return "+" + unsigned_match
-
-    return None
+    return unique_matches
 
 
 
@@ -592,11 +589,46 @@ if st.button("▶️ Run Matching Search"):
         for _, _, desc, val, err in sorted(results, key=lambda x: (x[0], x[1])):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
 
-            # Extract all numeric tokens (with optional sign) from the description
-            nums = [float(m) for m in re.findall(r'[-+]?\d*\.?\d+', str(desc))]
+                       # NEW: extract numeric tokens with correct sign, including cases like "-(15.977,)"
+            raw = str(desc)
+            nums = []
+            for m in re.finditer(r'\d*\.?\d+', raw):
+                x_str = m.group()
+                val = float(x_str)
+
+                # Default sign is +, but we inspect characters before the number
+                sign = 1.0
+                j = m.start() - 1
+
+                # Skip whitespace going backwards
+                while j >= 0 and raw[j].isspace():
+                    j -= 1
+
+                if j >= 0 and raw[j] in '()':
+                    # If directly before the number is '(' or ')',
+                    # look one more step back for a sign, like "-(" or "+("
+                    k = j - 1
+                    while k >= 0 and raw[k].isspace():
+                        k -= 1
+                    if k >= 0 and raw[k] == '-':
+                        sign = -1.0
+                    elif k >= 0 and raw[k] == '+':
+                        sign = 1.0
+                else:
+                    # Otherwise, the sign may be directly before the number
+                    if j >= 0 and raw[j] == '-':
+                        sign = -1.0
+                    elif j >= 0 and raw[j] == '+':
+                        sign = 1.0
+
+                nums.append(sign * val)
+
+            # Show ALL matching names for each numeric value
             for n in nums:
-                nm = get_global_name(n)
-                if nm:
+                name_list = get_global_name(n)
+                for nm in name_list:
+                    st.caption(f"↳ {n} → {nm}")
+
                     st.caption(f"↳ {n} → {nm}")
     else:
         st.warning("No matches found.")
