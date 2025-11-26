@@ -625,44 +625,54 @@ if st.button("▶️ Run Matching Search"):
             st.write(f"🔹 `{desc}` = **{val:.5f}** (error: {err:.5f})")
 
             # Extract numeric tokens with correct sign, including cases like "-(15.977,)"
-            raw = str(desc)
-            nums = []
-            for m in re.finditer(r'\d*\.?\d+', raw):
-                x_str = m.group()
-                v = float(x_str)
+                   # Extract numeric tokens with correct sign, but ignore the [m/z=..., z=...] prefix
+        raw = str(desc)
+        nums = []
 
-                # Default sign is +, but inspect characters before the number
-                sign = 1.0
-                j = m.start() - 1
+        # If there is a prefix like "[m/z=..., z=...]", ignore numbers inside the brackets
+        bracket_end = raw.find(']')
 
-                # Skip whitespace going backwards
-                while j >= 0 and raw[j].isspace():
-                    j -= 1
+        for m in re.finditer(r'\d*\.?\d+', raw):
+            # Skip numbers that are inside the [m/z=..., z=...] prefix
+            if bracket_end != -1 and m.start() < bracket_end:
+                continue
 
-                if j >= 0 and raw[j] in '()':
-                    # If directly before the number is '(' or ')',
-                    # look one more step back for a sign, like "-(" or "+("
-                    k = j - 1
-                    while k >= 0 and raw[k].isspace():
-                        k -= 1
-                    if k >= 0 and raw[k] == '-':
-                        sign = -1.0
-                    elif k >= 0 and raw[k] == '+':
-                        sign = 1.0
-                else:
-                    # Otherwise, the sign may be directly before the number
-                    if j >= 0 and raw[j] == '-':
-                        sign = -1.0
-                    elif j >= 0 and raw[j] == '+':
-                        sign = 1.0
+            x_str = m.group()
+            v = float(x_str)
 
-                nums.append(sign * v)
+            # Default sign is +, but inspect characters before the number
+            sign = 1.0
+            j = m.start() - 1
 
-            # Show ALL matching names for each numeric value
-            for n in nums:
-                name_list = get_global_name(n)
-                for nm in name_list:
-                    st.caption(f"↳ {n} → {nm}")
+            # Skip whitespace going backwards
+            while j >= 0 and raw[j].isspace():
+                j -= 1
+
+            if j >= 0 and raw[j] in '()':
+                # If directly before the number is '(' or ')',
+                # look one more step back for a sign, like "-(" or "+("
+                k = j - 1
+                while k >= 0 and raw[k].isspace():
+                    k -= 1
+                if k >= 0 and raw[k] == '-':
+                    sign = -1.0
+                elif k >= 0 and raw[k] == '+':
+                    sign = 1.0
+            else:
+                # Otherwise, the sign may be directly before the number
+                if j >= 0 and raw[j] == '-':
+                    sign = -1.0
+                elif j >= 0 and raw[j] == '+':
+                    sign = 1.0
+
+            nums.append(sign * v)
+
+        # Show ALL matching names for each numeric value
+        for n in nums:
+            name_list = get_global_name(n)
+            for nm in name_list:
+                st.caption(f"↳ {n} → {nm}")
+
     else:
         st.warning("No matches found.")
 
