@@ -376,6 +376,18 @@ with st.expander("⚙️ Combination Settings", expanded=False):
     run_sub_add = st.checkbox("Include - and + combined", True)
     run_list2_only = st.checkbox("Shorters-combos", False)
 
+    # NEW: Oligomers option
+    run_oligomers = st.checkbox("Oligomers", False)
+    oligomer_mode = None
+    if run_oligomers:
+        oligomer_mode = st.radio(
+            "Oligomer based on:",
+            ("Linear Monomer", "Cyclic Monomer"),
+            index=0,
+            key="oligomer_mode",
+        )
+
+
 # ════════════════════════════════════════════════
 # 🧠 Calculation Helpers
 # ════════════════════════════════════════════════
@@ -481,6 +493,57 @@ if st.button("▶️ Run Matching Search"):
                         done += 1
                         if done % 200 == 0:
                             progress.progress(min(done / 5000, 1.0))
+
+                        # ────────────── NEW: Oligomers (Dimer/Trimer/Tetramer) ──────────────
+            if run_oligomers and oligomer_mode is not None:
+                # X = 2,3,4 -> Dimer, Trimer, Tetramer
+                oligo_names = {2: "Dimer", 3: "Trimer", 4: "Tetramer"}
+                H2 = 2.014  # mass difference for H2 (used in your formulas)
+
+                for X in (2, 3, 4):
+                    label = oligo_names[X]
+
+                    if oligomer_mode == "Cyclic Monomer":
+                        # 1) Cyclic Oligomer: sum_main * X
+                        cyclic_mass = total_main * X
+                        # 2) Linear Oligomer: sum_main * X + 2.014
+                        linear_mass = total_main * X + H2
+                    else:
+                        # oligomer_mode == "Linear Monomer"
+                        # 1) Cyclic Oligomer:
+                        #    sum_main * X - ((X-1) * 2.014) - 2.014
+                        cyclic_mass = total_main * X - ((X - 1) * H2) - H2
+                        # 2) Linear Oligomer:
+                        #    sum_main * X - ((X-1) * 2.014)
+                        linear_mass = total_main * X - ((X - 1) * H2)
+
+                    # Add results (each one checked against current target_mass)
+                    # Cyclic oligomer
+                    add_result(
+                        f"Cyclic {label}",
+                        cyclic_mass,
+                        [("oligomer", X, "cyclic")],
+                        results,
+                        target_mass,
+                        prefix,
+                    )
+                    done += 1
+                    if done % 200 == 0:
+                        progress.progress(min(done / 5000, 1.0))
+
+                    # Linear oligomer
+                    add_result(
+                        f"Linear {label}",
+                        linear_mass,
+                        [("oligomer", X, "linear")],
+                        results,
+                        target_mass,
+                        prefix,
+                    )
+                    done += 1
+                    if done % 200 == 0:
+                        progress.progress(min(done / 5000, 1.0))
+
 
             # ────────────── NEW Shorters-combos (List2-only logic) ──────────────
             if run_list2_only:
