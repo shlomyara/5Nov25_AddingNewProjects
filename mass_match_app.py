@@ -495,6 +495,7 @@ if st.button("▶️ Run Matching Search"):
                             progress.progress(min(done / 5000, 1.0))
 
                         # ────────────── NEW: Oligomers (Dimer/Trimer/Tetramer) ──────────────
+                       # ────────────── NEW: Oligomers (Dimer/Trimer/Tetramer) ──────────────
             if run_oligomers and oligomer_mode is not None:
                 # X = 2,3,4 -> Dimer, Trimer, Tetramer
                 oligo_names = {2: "Dimer", 3: "Trimer", 4: "Tetramer"}
@@ -508,6 +509,10 @@ if st.button("▶️ Run Matching Search"):
                         cyclic_mass = total_main * X
                         # 2) Linear Oligomer: sum_main * X + 2.014
                         linear_mass = total_main * X + H2
+
+                        # Peptide-bound oligomer is NOT defined for Cyclic Monomer mode
+                        peptide_mass = None
+
                     else:
                         # oligomer_mode == "Linear Monomer"
                         # 1) Cyclic Oligomer:
@@ -516,8 +521,10 @@ if st.button("▶️ Run Matching Search"):
                         # 2) Linear Oligomer:
                         #    sum_main * X - ((X-1) * 2.014)
                         linear_mass = total_main * X - ((X - 1) * H2)
+                        # 3) Peptide-bound oligomer:
+                        #    sum_main * X  (your new rule)
+                        peptide_mass = total_main * X
 
-                    # Add results (each one checked against current target_mass)
                     # Cyclic oligomer
                     add_result(
                         f"Cyclic {label}",
@@ -543,6 +550,21 @@ if st.button("▶️ Run Matching Search"):
                     done += 1
                     if done % 200 == 0:
                         progress.progress(min(done / 5000, 1.0))
+
+                    # Peptide-bound oligomer (only for Linear Monomer mode)
+                    if peptide_mass is not None:
+                        add_result(
+                            f"Peptide-bound {label}",
+                            peptide_mass,
+                            [("oligomer", X, "peptide_bound")],
+                            results,
+                            target_mass,
+                            prefix,
+                        )
+                        done += 1
+                        if done % 200 == 0:
+                            progress.progress(min(done / 5000, 1.0))
+
 
 
             # ────────────── NEW Shorters-combos (List2-only logic) ──────────────
